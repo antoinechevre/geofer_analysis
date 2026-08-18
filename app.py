@@ -22,6 +22,7 @@ import streamlit as st
 from folium.plugins import MarkerCluster
 from huggingface_hub import hf_hub_download
 from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 GEOFER_DIR = "Data_geofer"
 INSEE_DIR = "Data_INSEE"
@@ -289,7 +290,7 @@ def main():
                 truncated = True
 
             served_geoms = [
-                geom
+                make_valid(geom)
                 for mode in selected_modes
                 for geom in isochrones_in_dept.get(mode, gpd.GeoDataFrame(geometry=[])).geometry
             ]
