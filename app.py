@@ -1,9 +1,10 @@
 """Géofer Analysis — potentiel territorial des gares ferroviaires.
 
-Superpose un fond de carte OSM, les isochrones Géofer (10 min voiture,
-10 min vélo, 15 min à pied) autour d'une gare, et la densité de
-population des carreaux INSEE 200x200 m (Filosofi 2019), avec des
-filtres sur les caractéristiques de chaque carreau.
+Carte unique et navigable (comme geofer.cerema.fr) : toutes les gares
+sont affichées en cluster, et les isochrones Géofer ainsi que la
+densité de population des carreaux INSEE 200x200 m (Filosofi 2019) se
+chargent pour la zone actuellement visible à l'écran, sur l'ensemble
+du territoire — pas seulement autour d'une gare choisie.
 """
 
 import os
@@ -12,8 +13,9 @@ import folium
 import geopandas as gpd
 import pandas as pd
 import streamlit as st
+from folium.plugins import MarkerCluster
 from huggingface_hub import hf_hub_download
-from shapely.geometry import Point
+from shapely.geometry import box
 from shapely.ops import unary_union
 from streamlit_folium import st_folium
 
@@ -28,15 +30,11 @@ ISOCHRONE_FILES = {
     "15 min à pied": (f"{GEOFER_DIR}/iso_15min_pieton.geojson", "#0a3a55"),
 }
 
-# Carreaux INSEE 200m (Filosofi 2019) : trop volumineux pour tenir dans le
-# quota de stockage du Space (1 Go), donc téléchargés à la demande depuis le
-# dataset HF qui les héberge déjà — avec repli sur une copie locale si
-# présente (développement local, cf. Data_INSEE/).
+# Carreaux INSEE 200m (Filosofi 2019, France métropolitaine) : trop volumineux
+# pour tenir dans le quota de stockage du Space (1 Go), donc téléchargés à la
+# demande depuis le dataset HF qui les héberge déjà — avec repli sur une copie
+# locale si présente (développement local, cf. Data_INSEE/).
 INSEE_DATASET_REPO = "antoinechevre/accessibility-data"
-INSEE_REMOTE_FILE_BY_DEP_PREFIX = {
-    "972": "extracted/carreaux_200m_mart.gpkg",
-    "974": "extracted/carreaux_200m_reun.gpkg",
-}
 INSEE_REMOTE_FILE_METROPOLE = "extracted/carreaux_200m_met.gpkg"
 
 COLOR_VARIABLES = {
@@ -45,6 +43,11 @@ COLOR_VARIABLES = {
     "Taux de pauvreté (%)": "taux_pauvrete",
     "Part de 65 ans et + (%)": "part_65p",
 }
+
+FRANCE_CENTER = [46.6, 2.5]
+FRANCE_ZOOM = 6
+MIN_ZOOM_FOR_DETAIL = 12
+MAX_CARREAUX_RENDER = 8000
 
 # Charte visuelle reprise de geofer.cerema.fr (thème PrimeNG bleu, police Lato)
 GEOFER_PRIMARY = "#1992D4"
@@ -91,21 +94,15 @@ def load_isochrones(path: str) -> gpd.GeoDataFrame:
     return gdf
 
 
-def station_buffer(gare, radius_km: float):
-    point = gpd.GeoSeries([Point(gare["wgs84Lon"], gare["wgs84Lat"])], crs="EPSG:4326")
-    buffer_l93 = point.to_crs("EPSG:2154").buffer(radius_km * 1000)
-    return gpd.GeoSeries(buffer_l93, crs="EPSG:2154").to_crs("EPSG:4326").iloc[0]
-
-
-@st.cache_data(show_spinner="Chargement des carreaux INSEE...")
-def load_insee_carreaux(insee_path: str, _clip_geom, clip_bounds: tuple) -> gpd.GeoDataFrame:
-    """Tous les carreaux dans le rayon d'affichage (_clip_geom), pas seulement ceux desservis."""
-    bbox_geom = gpd.GeoSeries([_clip_geom.envelope], crs="EPSG:4326")
+@st.cache_data(show_spinner="Chargement des carreaux INSEE de la zone affichée...")
+def load_insee_carreaux(insee_path: str, bounds: tuple) -> gpd.GeoDataFrame:
+    """Tous les carreaux dans les limites de la carte (bounds), pas seulement ceux desservis."""
+    west, south, east, north = bounds
+    bbox_geom = gpd.GeoSeries([box(west, south, east, north)], crs="EPSG:4326")
     gdf = gpd.read_file(insee_path, bbox=bbox_geom)
     if gdf.empty:
         return gdf
     gdf = gdf.to_crs("EPSG:4326")
-    gdf = gdf[gdf.intersects(_clip_geom)].copy()
 
     gdf["pop"] = gdf["ind"]
     gdf["niveau_vie"] = gdf["ind_snv"] / gdf["ind"]
@@ -115,8 +112,8 @@ def load_insee_carreaux(insee_path: str, _clip_geom, clip_bounds: tuple) -> gpd.
 
 
 @st.cache_resource(show_spinner="Récupération des carreaux INSEE (premier chargement, peut prendre une minute)...")
-def get_insee_local_path(remote_filename: str) -> str:
-    local_path = os.path.join(INSEE_DIR, os.path.basename(remote_filename))
+def get_insee_local_path() -> str:
+    local_path = os.path.join(INSEE_DIR, os.path.basename(INSEE_REMOTE_FILE_METROPOLE))
     if os.path.exists(local_path):
         return local_path
     # antoinechevre/accessibility-data est un dataset privé : le Space a besoin
@@ -125,7 +122,7 @@ def get_insee_local_path(remote_filename: str) -> str:
         return hf_hub_download(
             repo_id=INSEE_DATASET_REPO,
             repo_type="dataset",
-            filename=remote_filename,
+            filename=INSEE_REMOTE_FILE_METROPOLE,
             token=os.environ.get("HF_TOKEN"),
         )
     except Exception as exc:
@@ -138,14 +135,20 @@ def get_insee_local_path(remote_filename: str) -> str:
         st.stop()
 
 
-def insee_file_for_departement(dep: str) -> str:
-    dep = str(dep)[:3]
-    remote_filename = INSEE_REMOTE_FILE_BY_DEP_PREFIX.get(dep, INSEE_REMOTE_FILE_METROPOLE)
-    return get_insee_local_path(remote_filename)
+def station_popup(gare) -> str:
+    lines = [f"<b>{gare['nomGare']}</b><br>{gare['nomCommune']}"]
+    for mode_label, col in [
+        ("15 min à pied", "habitants15MinAPied2023"),
+        ("10 min à vélo", "habitants10MinAVelo2023"),
+        ("10 min en voiture", "habitants10MinEnVoiture2023"),
+    ]:
+        if col in gare and pd.notna(gare[col]):
+            lines.append(f"{mode_label} : {int(gare[col]):,} habitants".replace(",", " "))
+    return "<br>".join(lines)
 
 
-def build_map(gare, isochrones_by_mode, selected_modes, carreaux, color_field, color_label, show_served):
-    m = folium.Map(location=[gare["wgs84Lat"], gare["wgs84Lon"]], zoom_start=13, tiles=None)
+def build_map(gares, isochrones_in_view, selected_modes, carreaux, color_field, color_label, show_served, center, zoom):
+    m = folium.Map(location=center, zoom_start=zoom, tiles=None)
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
     folium.TileLayer("CartoDB positron", name="CartoDB Positron").add_to(m)
 
@@ -181,7 +184,9 @@ def build_map(gare, isochrones_by_mode, selected_modes, carreaux, color_field, c
         colormap.add_to(m)
 
     for mode in selected_modes:
-        gdf = isochrones_by_mode[mode]
+        gdf = isochrones_in_view.get(mode)
+        if gdf is None or gdf.empty:
+            continue
         _, color = ISOCHRONE_FILES[mode]
         folium.GeoJson(
             gdf,
@@ -195,11 +200,14 @@ def build_map(gare, isochrones_by_mode, selected_modes, carreaux, color_field, c
             },
         ).add_to(m)
 
-    folium.Marker(
-        [gare["wgs84Lat"], gare["wgs84Lon"]],
-        tooltip=gare["nomGare"],
-        icon=folium.Icon(color="darkred", icon="train", prefix="fa"),
-    ).add_to(m)
+    cluster = MarkerCluster(name="Gares").add_to(m)
+    for _, gare in gares.iterrows():
+        folium.Marker(
+            [gare["wgs84Lat"], gare["wgs84Lon"]],
+            tooltip=gare["nomGare"],
+            popup=folium.Popup(station_popup(gare), max_width=250),
+            icon=folium.Icon(color="darkred", icon="train", prefix="fa"),
+        ).add_to(cluster)
 
     folium.LayerControl(collapsed=False).add_to(m)
     return m
@@ -210,31 +218,36 @@ def main():
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
     st.title("🚉 Géofer Analysis — potentiel territorial des gares")
     st.caption(
-        "Isochrones Géofer autour d'une gare superposées à la densité de population "
-        "des carreaux INSEE 200x200 m (Filosofi 2019)."
+        "Carte navigable : les isochrones Géofer et la densité de population des carreaux "
+        "INSEE 200x200 m (Filosofi 2019) se chargent pour la zone affichée, sur tout le territoire."
     )
 
     gares = load_gares()
 
+    if "map_center" not in st.session_state:
+        st.session_state.map_center = FRANCE_CENTER
+    if "map_zoom" not in st.session_state:
+        st.session_state.map_zoom = FRANCE_ZOOM
+    if "map_bounds" not in st.session_state:
+        st.session_state.map_bounds = None
+
     with st.sidebar:
-        st.header("Gare")
-        search = st.text_input("Rechercher une gare ou une commune")
-        options = gares
+        st.header("Rechercher une gare")
+        search = st.text_input("Nom de gare ou commune")
         if search:
-            mask = gares["label"].str.contains(search, case=False, na=False)
-            options = gares[mask]
-        if options.empty:
-            st.warning("Aucune gare ne correspond à la recherche.")
-            st.stop()
-        label = st.selectbox("Gare", options["label"], index=0)
-        gare = options[options["label"] == label].iloc[0]
+            matches = gares[gares["label"].str.contains(search, case=False, na=False)]
+            if matches.empty:
+                st.caption("Aucun résultat.")
+            else:
+                pick = st.selectbox("Résultats", matches["label"])
+                if st.button("Centrer la carte sur cette gare"):
+                    row = matches[matches["label"] == pick].iloc[0]
+                    st.session_state.map_center = [row["wgs84Lat"], row["wgs84Lon"]]
+                    st.session_state.map_zoom = 14
+                    st.session_state.map_bounds = None
 
         st.header("Isochrones affichées")
         selected_modes = [mode for mode in ISOCHRONE_FILES if st.checkbox(mode, value=True)]
-
-        st.header("Zone d'affichage")
-        radius_km = st.slider("Rayon d'affichage des carreaux (km)", 1, 20, 5)
-        st.caption("Tous les carreaux du rayon sont affichés, y compris hors de l'aire d'attraction des gares.")
 
         st.header("Filtres carreaux INSEE")
         color_label = st.selectbox("Colorer les carreaux non desservis selon", list(COLOR_VARIABLES.keys()))
@@ -242,48 +255,90 @@ def main():
         pop_min = st.slider("Population minimale du carreau", 0, 200, 1, step=1)
         show_served = st.checkbox("Afficher aussi les carreaux desservis (en gris)", value=True)
 
-    isochrones_by_mode = {
-        mode: load_isochrones(path).query("code_uic == @gare.codeUic")
-        for mode, (path, _) in ISOCHRONE_FILES.items()
-    }
+    zoom = st.session_state.map_zoom
+    bounds = st.session_state.map_bounds
+    show_detail = bounds is not None and zoom >= MIN_ZOOM_FOR_DETAIL
 
-    display_geom = station_buffer(gare, radius_km)
-    insee_path = insee_file_for_departement(gare["inseeDepartement"])
-    carreaux = load_insee_carreaux(insee_path, display_geom, display_geom.bounds)
+    isochrones_in_view = {}
+    carreaux = None
+    truncated = False
 
-    if carreaux.empty:
-        st.warning("Aucun carreau INSEE trouvé sur cette zone.")
+    if not show_detail:
+        st.info(
+            "Zoomez sur une zone (échelle ville/agglomération) pour afficher les isochrones "
+            "et les carreaux INSEE. Toutes les gares sont visibles, regroupées en clusters, "
+            "quel que soit le niveau de zoom."
+        )
     else:
-        carreaux = carreaux[carreaux["pop"] >= pop_min].copy()
-        if selected_modes:
-            union_geom = unary_union([isochrones_by_mode[m].geometry.iloc[0] for m in selected_modes])
-            carreaux["desservi"] = carreaux.intersects(union_geom)
+        west, south, east, north = bounds
+        in_view = gares[
+            gares["wgs84Lon"].between(west, east) & gares["wgs84Lat"].between(south, north)
+        ]
+        codes_in_view = set(in_view["codeUic"])
+
+        for mode, (path, _) in ISOCHRONE_FILES.items():
+            full = load_isochrones(path)
+            isochrones_in_view[mode] = full[full["code_uic"].isin(codes_in_view)]
+
+        insee_path = get_insee_local_path()
+        carreaux = load_insee_carreaux(insee_path, bounds)
+
+        if carreaux.empty:
+            st.warning("Aucun carreau INSEE trouvé sur cette zone.")
         else:
-            carreaux["desservi"] = False
+            carreaux = carreaux[carreaux["pop"] >= pop_min].copy()
+            if len(carreaux) > MAX_CARREAUX_RENDER:
+                carreaux = carreaux.nlargest(MAX_CARREAUX_RENDER, "pop")
+                truncated = True
+
+            served_geoms = [
+                geom
+                for mode in selected_modes
+                for geom in isochrones_in_view.get(mode, gpd.GeoDataFrame(geometry=[])).geometry
+            ]
+            if served_geoms:
+                union_geom = unary_union(served_geoms)
+                carreaux["desservi"] = carreaux.intersects(union_geom)
+            else:
+                carreaux["desservi"] = False
+
+        if truncated:
+            st.warning(
+                f"Trop de carreaux dans la zone affichée : limité aux {MAX_CARREAUX_RENDER:,} "
+                "les plus peuplés. Zoomez davantage pour un rendu exhaustif.".replace(",", " ")
+            )
 
     col_map, col_stats = st.columns([3, 1])
 
     with col_map:
-        m = build_map(gare, isochrones_by_mode, selected_modes, carreaux, color_field, color_label, show_served)
-        st_folium(m, width=None, height=650, returned_objects=[])
+        m = build_map(
+            gares, isochrones_in_view, selected_modes, carreaux, color_field, color_label,
+            show_served, st.session_state.map_center, st.session_state.map_zoom,
+        )
+        st_data = st_folium(m, width=None, height=650, returned_objects=["bounds", "zoom", "center"])
+
+    if st_data:
+        if st_data.get("zoom") is not None:
+            st.session_state.map_zoom = st_data["zoom"]
+        if st_data.get("center"):
+            st.session_state.map_center = [st_data["center"]["lat"], st_data["center"]["lng"]]
+        if st_data.get("bounds"):
+            b = st_data["bounds"]
+            sw, ne = b["_southWest"], b["_northEast"]
+            new_bounds = (sw["lng"], sw["lat"], ne["lng"], ne["lat"])
+            if new_bounds != st.session_state.map_bounds:
+                st.session_state.map_bounds = new_bounds
+                st.rerun()
 
     with col_stats:
-        st.subheader(gare["nomGare"])
-        st.write(f"{gare['nomCommune']} ({gare['inseeDepartement']})")
+        st.subheader("Zone affichée")
         if carreaux is not None and not carreaux.empty:
             unserved = carreaux[~carreaux["desservi"]]
-            st.metric("Population non desservie (rayon affiché)", f"{int(unserved['pop'].sum()):,}".replace(",", " "))
+            st.metric("Population non desservie", f"{int(unserved['pop'].sum()):,}".replace(",", " "))
             st.metric("Carreaux peuplés non desservis", f"{len(unserved):,}".replace(",", " "))
             st.metric("Population desservie (isochrones)", f"{int(carreaux[carreaux['desservi']]['pop'].sum()):,}".replace(",", " "))
-        st.divider()
-        st.caption("Potentiel Géofer déclaré (dans le rayon officiel de chaque mode) :")
-        for mode_label, col in [
-            ("15 min à pied", "habitants15MinAPied2023"),
-            ("10 min à vélo", "habitants10MinAVelo2023"),
-            ("10 min en voiture", "habitants10MinEnVoiture2023"),
-        ]:
-            if col in gare and pd.notna(gare[col]):
-                st.write(f"**{mode_label}** : {int(gare[col]):,} habitants".replace(",", " "))
+        else:
+            st.caption("Pas encore de données pour cette zone.")
 
 
 if __name__ == "__main__":
