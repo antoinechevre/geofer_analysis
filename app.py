@@ -101,6 +101,17 @@ def load_departements() -> gpd.GeoDataFrame:
     return gdf.sort_values("code")
 
 
+def departements_limitrophes(dept_code: str, departements: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    dept_geom = departements.loc[departements["code"] == dept_code, "geometry"].iloc[0]
+    autres = departements[departements["code"] != dept_code]
+    voisins = autres[autres.geometry.touches(dept_geom)]
+    if voisins.empty:
+        # Repli : des géométries simplifiées peuvent laisser un micro-espace
+        # entre deux départements limitrophes, faisant échouer "touches".
+        voisins = autres[autres.geometry.intersects(dept_geom.buffer(0.005))]
+    return voisins
+
+
 @st.cache_data(show_spinner=False)
 def load_isochrones(path: str) -> gpd.GeoDataFrame:
     gdf = gpd.read_file(path)
@@ -108,7 +119,7 @@ def load_isochrones(path: str) -> gpd.GeoDataFrame:
     return gdf
 
 
-@st.cache_data(show_spinner="Chargement des carreaux INSEE du département...")
+@st.cache_data(show_spinner="Chargement des carreaux INSEE de la zone (peut prendre 10-15s avec les départements limitrophes)...")
 def load_insee_carreaux(insee_path: str, _dept_geom, dept_code: str) -> gpd.GeoDataFrame:
     """Tous les carreaux du département (_dept_geom), pas seulement ceux desservis."""
     bbox_geom = gpd.GeoSeries([_dept_geom.envelope], crs="EPSG:4326")
@@ -346,6 +357,7 @@ def main():
     with st.sidebar:
         st.header("Zone à charger")
         dept_label = st.selectbox("Département", departements["label"], index=None, placeholder="Choisir un département")
+        include_voisins = st.checkbox("Inclure les départements limitrophes", value=True)
 
         st.header("Isochrones affichées")
         selected_modes = [mode for mode in ISOCHRONE_FILES if st.checkbox(mode, value=True)]
@@ -365,10 +377,20 @@ def main():
         st.info("Choisissez un département dans le menu de gauche pour afficher les isochrones et les carreaux INSEE.")
     else:
         dept = departements[departements["label"] == dept_label].iloc[0]
-        dept_geom = dept.geometry
-        bounds = dept_geom.bounds
+
+        if include_voisins:
+            voisins = departements_limitrophes(dept["code"], departements)
+        else:
+            voisins = departements.iloc[0:0]
+
+        zone_geoms = [make_valid(dept.geometry)] + [make_valid(g) for g in voisins.geometry]
+        zone_geom = unary_union(zone_geoms)
+        bounds = zone_geom.bounds
         center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
-        zoom = 9
+        zoom = 9 if voisins.empty else 8
+
+        if not voisins.empty:
+            st.caption("Départements limitrophes inclus : " + ", ".join(sorted(voisins["nom"])))
 
         in_dept = gares[
             gares["wgs84Lon"].between(bounds[0], bounds[2]) & gares["wgs84Lat"].between(bounds[1], bounds[3])
@@ -380,10 +402,11 @@ def main():
             isochrones_in_dept[mode] = full[full["code_uic"].isin(codes_in_dept)]
 
         insee_path = get_insee_local_path()
-        carreaux = load_insee_carreaux(insee_path, dept_geom, dept["code"])
+        zone_key = "+".join(sorted([dept["code"]] + voisins["code"].tolist()))
+        carreaux = load_insee_carreaux(insee_path, zone_geom, zone_key)
 
         if carreaux.empty:
-            st.warning("Aucun carreau INSEE trouvé dans ce département.")
+            st.warning("Aucun carreau INSEE trouvé dans cette zone.")
         else:
             carreaux = carreaux[carreaux["pop"] >= pop_min].copy()
             if len(carreaux) > MAX_CARREAUX_RENDER:
@@ -403,7 +426,7 @@ def main():
 
         if truncated:
             st.warning(
-                f"Trop de carreaux dans ce département : limité aux {MAX_CARREAUX_RENDER:,} "
+                f"Trop de carreaux dans cette zone : limité aux {MAX_CARREAUX_RENDER:,} "
                 "les plus peuplés.".replace(",", " ")
             )
 
