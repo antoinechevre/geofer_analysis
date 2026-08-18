@@ -147,8 +147,11 @@ def station_popup(gare) -> str:
     return "<br>".join(lines)
 
 
-def build_map(gares, isochrones_in_view, selected_modes, carreaux, color_field, color_label, show_served, center, zoom):
-    m = folium.Map(location=center, zoom_start=zoom, tiles=None)
+def build_map(gares, isochrones_in_view, selected_modes, carreaux, color_field, color_label, show_served):
+    # location/zoom_start ne servent qu'au tout premier rendu : ensuite, la vue
+    # est pilotée dynamiquement par les paramètres zoom/center de st_folium
+    # (via une key stable), sans jamais recharger la carte.
+    m = folium.Map(location=FRANCE_CENTER, zoom_start=FRANCE_ZOOM, tiles=None)
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
     folium.TileLayer("CartoDB positron", name="CartoDB Positron").add_to(m)
 
@@ -313,9 +316,15 @@ def main():
     with col_map:
         m = build_map(
             gares, isochrones_in_view, selected_modes, carreaux, color_field, color_label,
-            show_served, st.session_state.map_center, st.session_state.map_zoom,
+            show_served,
         )
-        st_data = st_folium(m, width=None, height=650, returned_objects=["bounds", "zoom", "center"])
+        st_data = st_folium(
+            m, width=None, height=650,
+            returned_objects=["bounds", "zoom", "center"],
+            zoom=st.session_state.map_zoom,
+            center=tuple(st.session_state.map_center),
+            key="geofer_map",
+        )
 
     if st_data:
         if st_data.get("zoom") is not None:
@@ -326,7 +335,11 @@ def main():
             b = st_data["bounds"]
             sw, ne = b["_southWest"], b["_northEast"]
             new_bounds = (sw["lng"], sw["lat"], ne["lng"], ne["lat"])
-            if new_bounds != st.session_state.map_bounds:
+            old_bounds = st.session_state.map_bounds
+            bounds_changed = old_bounds is None or any(
+                abs(a - b) > 1e-4 for a, b in zip(new_bounds, old_bounds)
+            )
+            if bounds_changed:
                 st.session_state.map_bounds = new_bounds
                 st.rerun()
 
