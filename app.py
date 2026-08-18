@@ -109,7 +109,23 @@ def get_insee_local_path(remote_filename: str) -> str:
     local_path = os.path.join(INSEE_DIR, os.path.basename(remote_filename))
     if os.path.exists(local_path):
         return local_path
-    return hf_hub_download(repo_id=INSEE_DATASET_REPO, repo_type="dataset", filename=remote_filename)
+    # antoinechevre/accessibility-data est un dataset privé : le Space a besoin
+    # d'un secret HF_TOKEN (lecture) configuré dans ses variables d'environnement.
+    try:
+        return hf_hub_download(
+            repo_id=INSEE_DATASET_REPO,
+            repo_type="dataset",
+            filename=remote_filename,
+            token=os.environ.get("HF_TOKEN"),
+        )
+    except Exception as exc:
+        st.error(
+            "Impossible de récupérer les carreaux INSEE depuis "
+            f"{INSEE_DATASET_REPO} : {exc}\n\n"
+            "Vérifiez que le secret HF_TOKEN (lecture sur ce dataset privé) "
+            "est configuré dans les paramètres du Space."
+        )
+        st.stop()
 
 
 def insee_file_for_departement(dep: str) -> str:
