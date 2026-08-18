@@ -13,6 +13,7 @@ Accessibility_analysis, onglet Cartographie INSEE) plutôt qu'un
 aller-retour Streamlit à chaque interaction.
 """
 
+import json
 import os
 
 import folium
@@ -52,6 +53,7 @@ COLOR_VARIABLES = {
 
 FRANCE_CENTER = [46.6, 2.5]
 FRANCE_ZOOM = 6
+FRANCE_BOUNDS = (-5.5, 41.2, 9.8, 51.3)  # minx, miny, maxx, maxy
 MAX_CARREAUX_RENDER = 10000
 
 # Charte visuelle reprise de geofer.cerema.fr (thème PrimeNG bleu, police Lato)
@@ -161,12 +163,98 @@ def station_popup(gare) -> str:
     return "<br>".join(lines)
 
 
-def build_map(gares, center, zoom, isochrones_in_dept, selected_modes, carreaux, color_field, color_label, show_served):
+def script_reajuster_si_masque(m, bounds):
+    """<script> qui réajuste une carte Leaflet (invalidateSize + fitBounds)
+    une fois son conteneur stabilisé en taille, sans animation.
+
+    L'iframe (st.iframe) n'a pas de largeur fixée : sa largeur réelle dépend
+    de la mise en page Streamlit (colonnes, sidebar...) qui se stabilise en
+    plusieurs passes après le premier paint. Réagir à chaque redimensionnement
+    applique un fitBounds animé à chaque passe, ce qui fait visiblement
+    "trembler" la carte pendant la stabilisation — d'où le debounce : la
+    correction ne part, sans animation, qu'une fois les redimensionnements
+    retombés au calme pendant DEBOUNCE_MS (technique reprise de
+    antoinechevre/Accessibility_analysis, src/cartographie.py).
+
+    bounds: (minx, miny, maxx, maxy).
+    """
+    nom_carte = m.get_name()
+    minx, miny, maxx, maxy = bounds
+    bounds_json = json.dumps([[float(miny), float(minx)], [float(maxy), float(maxx)]])
+    return f"""
+    <script>
+    window.addEventListener("load", function() {{
+        var carte = {nom_carte};
+        var DEBOUNCE_MS = 250;
+        var minuteur = null;
+        var observer = new ResizeObserver(function(entries) {{
+            for (var entree of entries) {{
+                if (entree.contentRect.width > 0 && entree.contentRect.height > 0) {{
+                    clearTimeout(minuteur);
+                    minuteur = setTimeout(function() {{
+                        carte.invalidateSize({{animate: false}});
+                        carte.fitBounds({bounds_json}, {{animate: false}});
+                        observer.disconnect();
+                    }}, DEBOUNCE_MS);
+                    return;
+                }}
+            }}
+        }});
+        observer.observe(carte.getContainer());
+    }});
+    </script>
+    """
+
+
+def script_export_png(m):
+    """Bouton flottant qui exporte la vue actuelle de la carte (zoom/pan en
+    cours) en PNG, via leaflet-image (rasterise tuiles + calques canvas)."""
+    nom_carte = m.get_name()
+    return f"""
+    <script src="https://cdn.jsdelivr.net/npm/leaflet-image@0.4.0/leaflet-image.js"></script>
+    <script>
+    window.addEventListener("load", function() {{
+        var carte = {nom_carte};
+        var bouton = document.createElement("button");
+        bouton.innerHTML = "\\u2b07\\ufe0f Export PNG";
+        bouton.style.cssText = "position:absolute; top:10px; right:50px; z-index:1000; "
+            + "background:white; border:2px solid rgba(0,0,0,0.2); border-radius:4px; "
+            + "padding:6px 10px; font-family:'Lato',Helvetica,sans-serif; font-size:13px; "
+            + "cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,0.2);";
+        bouton.onclick = function() {{
+            bouton.disabled = true;
+            var texte_origine = bouton.innerHTML;
+            bouton.innerHTML = "Export en cours...";
+            leafletImage(carte, function(err, canvas) {{
+                bouton.disabled = false;
+                bouton.innerHTML = texte_origine;
+                if (err) {{
+                    console.error(err);
+                    alert("Export PNG impossible : " + err);
+                    return;
+                }}
+                var lien = document.createElement("a");
+                lien.download = "geofer_carte.png";
+                lien.href = canvas.toDataURL("image/png");
+                document.body.appendChild(lien);
+                lien.click();
+                document.body.removeChild(lien);
+            }});
+        }};
+        carte.getContainer().appendChild(bouton);
+    }});
+    </script>
+    """
+
+
+def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label, show_served):
     # prefer_canvas : rendu canvas plutôt que SVG, indispensable pour garder un
     # zoom/pan fluide avec plusieurs milliers de polygones (carreaux INSEE).
-    m = folium.Map(location=center, zoom_start=zoom, tiles=None, prefer_canvas=True)
-    folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
-    folium.TileLayer("CartoDB positron", name="CartoDB Positron").add_to(m)
+    m = folium.Map(location=center, zoom_start=zoom, tiles=None, prefer_canvas=True, control_scale=True)
+    # cross_origin : nécessaire pour que leaflet-image (export PNG) puisse lire
+    # les tuiles sans que le canvas soit "taint" par la politique cross-origin.
+    folium.TileLayer("OpenStreetMap", name="OpenStreetMap", cross_origin=True).add_to(m)
+    folium.TileLayer("CartoDB positron", name="CartoDB Positron", cross_origin=True).add_to(m)
 
     if carreaux is not None and not carreaux.empty:
         unserved = carreaux[~carreaux["desservi"]]
@@ -226,6 +314,8 @@ def build_map(gares, center, zoom, isochrones_in_dept, selected_modes, carreaux,
         ).add_to(cluster)
 
     folium.LayerControl(collapsed=False).add_to(m)
+    m.get_root().html.add_child(folium.Element(script_reajuster_si_masque(m, bounds)))
+    m.get_root().html.add_child(folium.Element(script_export_png(m)))
     return m
 
 
@@ -258,7 +348,7 @@ def main():
     isochrones_in_dept = {}
     carreaux = None
     truncated = False
-    center, zoom = FRANCE_CENTER, FRANCE_ZOOM
+    center, zoom, bounds = FRANCE_CENTER, FRANCE_ZOOM, FRANCE_BOUNDS
 
     if dept_label is None:
         st.info("Choisissez un département dans le menu de gauche pour afficher les isochrones et les carreaux INSEE.")
@@ -310,7 +400,7 @@ def main():
 
     with col_map:
         m = build_map(
-            gares, center, zoom, isochrones_in_dept, selected_modes, carreaux, color_field, color_label,
+            gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label,
             show_served,
         )
         st.iframe(m.get_root().render(), height=650)
