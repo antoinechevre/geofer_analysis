@@ -58,7 +58,9 @@ MAX_CARREAUX_RENDER = 10000
 
 # Charte visuelle reprise de geofer.cerema.fr (thème PrimeNG bleu, police Lato)
 GEOFER_PRIMARY = "#1992D4"
-CARREAUX_COLOR_SCALE = ["#fdf4f5", "#f0a2a5", "#e25055", "#db272d", "#581012"]
+# Échelle plus saturée/contrastée que le rouge PrimeNG d'origine (trop pâle en
+# bas d'échelle pour bien faire ressortir les carreaux peu peuplés non desservis).
+CARREAUX_COLOR_SCALE = ["#ffe0e0", "#ff8080", "#ff2626", "#b30000", "#3d0000"]
 GEOFER_SURFACE_GROUND = "#eff3f8"
 GEOFER_TEXT_COLOR = "#495057"
 
