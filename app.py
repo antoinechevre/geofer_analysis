@@ -6,10 +6,13 @@ population des carreaux INSEE 200x200 m (Filosofi 2019), avec des
 filtres sur les caractéristiques de chaque carreau.
 """
 
+import os
+
 import folium
 import geopandas as gpd
 import pandas as pd
 import streamlit as st
+from huggingface_hub import hf_hub_download
 from shapely.ops import unary_union
 from streamlit_folium import st_folium
 
@@ -22,12 +25,16 @@ ISOCHRONE_FILES = {
     "15 min à pied": (f"{GEOFER_DIR}/iso_15min_pieton.geojson", "#d62728"),
 }
 
-# Fichier INSEE à utiliser selon le département de la gare (métropole par défaut)
-INSEE_FILE_BY_DEP_PREFIX = {
-    "972": f"{INSEE_DIR}/carreaux_200m_mart.gpkg",
-    "974": f"{INSEE_DIR}/carreaux_200m_reun.gpkg",
+# Carreaux INSEE 200m (Filosofi 2019) : trop volumineux pour tenir dans le
+# quota de stockage du Space (1 Go), donc téléchargés à la demande depuis le
+# dataset HF qui les héberge déjà — avec repli sur une copie locale si
+# présente (développement local, cf. Data_INSEE/).
+INSEE_DATASET_REPO = "antoinechevre/accessibility-data"
+INSEE_REMOTE_FILE_BY_DEP_PREFIX = {
+    "972": "extracted/carreaux_200m_mart.gpkg",
+    "974": "extracted/carreaux_200m_reun.gpkg",
 }
-INSEE_FILE_METROPOLE = f"{INSEE_DIR}/carreaux_200m_met.gpkg"
+INSEE_REMOTE_FILE_METROPOLE = "extracted/carreaux_200m_met.gpkg"
 
 COLOR_VARIABLES = {
     "Population": "pop",
@@ -97,9 +104,18 @@ def load_insee_carreaux(insee_path: str, _clip_geom, clip_bounds: tuple) -> gpd.
     return gdf
 
 
+@st.cache_resource(show_spinner="Récupération des carreaux INSEE (premier chargement, peut prendre une minute)...")
+def get_insee_local_path(remote_filename: str) -> str:
+    local_path = os.path.join(INSEE_DIR, os.path.basename(remote_filename))
+    if os.path.exists(local_path):
+        return local_path
+    return hf_hub_download(repo_id=INSEE_DATASET_REPO, repo_type="dataset", filename=remote_filename)
+
+
 def insee_file_for_departement(dep: str) -> str:
     dep = str(dep)[:3]
-    return INSEE_FILE_BY_DEP_PREFIX.get(dep, INSEE_FILE_METROPOLE)
+    remote_filename = INSEE_REMOTE_FILE_BY_DEP_PREFIX.get(dep, INSEE_REMOTE_FILE_METROPOLE)
+    return get_insee_local_path(remote_filename)
 
 
 def build_map(gare, isochrones_by_mode, selected_modes, carreaux, color_field, color_label):
