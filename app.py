@@ -269,7 +269,7 @@ def script_export_png(m):
     """
 
 
-def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label, show_served, carreaux_opacity):
+def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label, show_served):
     # prefer_canvas : rendu canvas plutôt que SVG, indispensable pour garder un
     # zoom/pan fluide avec plusieurs milliers de polygones (carreaux INSEE).
     m = folium.Map(location=center, zoom_start=zoom, tiles=None, prefer_canvas=True, control_scale=True)
@@ -292,10 +292,10 @@ def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, c
 
         display_carreaux = carreaux if show_served else unserved
 
-        def style_carreau(feature, cf=color_field, cm=colormap, op=carreaux_opacity):
+        def style_carreau(feature, cf=color_field, cm=colormap):
             if feature["properties"]["desservi"]:
-                return {"fillColor": "#c8ced6", "color": "#9aa3af", "weight": 0, "fillOpacity": op * 0.38}
-            return {"fillColor": cm(feature["properties"][cf]), "color": "#581012", "weight": 0, "fillOpacity": op}
+                return {"fillColor": "#c8ced6", "color": "#9aa3af", "weight": 0, "fillOpacity": 0.35}
+            return {"fillColor": cm(feature["properties"][cf]), "color": "#581012", "weight": 0, "fillOpacity": 0.92}
 
         folium.GeoJson(
             display_carreaux,
@@ -367,7 +367,6 @@ def main():
         color_field = COLOR_VARIABLES[color_label]
         pop_min = st.slider("Population minimale du carreau", 0, 200, 1, step=1)
         show_served = st.checkbox("Afficher aussi les carreaux desservis (en gris)", value=True)
-        carreaux_opacity = st.slider("Transparence des carreaux (population)", 0, 100, 92, step=5) / 100
 
     isochrones_in_dept = {}
     carreaux = None
@@ -436,7 +435,7 @@ def main():
     with col_map:
         m = build_map(
             gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label,
-            show_served, carreaux_opacity,
+            show_served,
         )
         st.iframe(m.get_root().render(), height=650)
 
