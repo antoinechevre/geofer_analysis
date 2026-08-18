@@ -208,10 +208,18 @@ def script_reajuster_si_masque(m, bounds):
 
 def script_export_png(m):
     """Bouton flottant qui exporte la vue actuelle de la carte (zoom/pan en
-    cours) en PNG, via leaflet-image (rasterise tuiles + calques canvas)."""
+    cours) en PNG, via html2canvas.
+
+    Utilisait leaflet-image auparavant : cette librairie (2016, plus
+    maintenue) re-télécharge chaque tuile visible image par image plutôt que
+    de lire le rendu déjà affiché, et gère mal les gros clusters de
+    marqueurs (nos 3589 gares) — export mesuré à plusieurs minutes, parfois
+    quasi bloqué. html2canvas lit directement le DOM/canvas déjà rendu par
+    le navigateur, ce qui est nettement plus rapide et fiable.
+    """
     nom_carte = m.get_name()
     return f"""
-    <script src="https://cdn.jsdelivr.net/npm/leaflet-image@0.4.0/leaflet-image.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script>
     window.addEventListener("load", function() {{
         var carte = {nom_carte};
@@ -225,20 +233,23 @@ def script_export_png(m):
             bouton.disabled = true;
             var texte_origine = bouton.innerHTML;
             bouton.innerHTML = "Export en cours...";
-            leafletImage(carte, function(err, canvas) {{
+            bouton.style.visibility = "hidden";
+            html2canvas(carte.getContainer(), {{useCORS: true, allowTaint: false}}).then(function(canvas) {{
                 bouton.disabled = false;
                 bouton.innerHTML = texte_origine;
-                if (err) {{
-                    console.error(err);
-                    alert("Export PNG impossible : " + err);
-                    return;
-                }}
+                bouton.style.visibility = "visible";
                 var lien = document.createElement("a");
                 lien.download = "geofer_carte.png";
                 lien.href = canvas.toDataURL("image/png");
                 document.body.appendChild(lien);
                 lien.click();
                 document.body.removeChild(lien);
+            }}).catch(function(err) {{
+                bouton.disabled = false;
+                bouton.innerHTML = texte_origine;
+                bouton.style.visibility = "visible";
+                console.error(err);
+                alert("Export PNG impossible : " + err);
             }});
         }};
         carte.getContainer().appendChild(bouton);
