@@ -45,7 +45,7 @@ COLOR_VARIABLES = {
 
 # Charte visuelle reprise de geofer.cerema.fr (thème PrimeNG bleu, police Lato)
 GEOFER_PRIMARY = "#1992D4"
-GEOFER_BLUE_SCALE = ["#f4fafd", "#c8e5f5", "#70bbe4", "#1992d4", "#0a3a55"]
+CARREAUX_COLOR_SCALE = ["#fdf4f5", "#f0a2a5", "#e25055", "#db272d", "#581012"]
 GEOFER_SURFACE_GROUND = "#eff3f8"
 GEOFER_TEXT_COLOR = "#495057"
 
@@ -140,7 +140,7 @@ def build_map(gare, isochrones_by_mode, selected_modes, carreaux, color_field, c
     if carreaux is not None and not carreaux.empty:
         vmin, vmax = float(carreaux[color_field].min()), float(carreaux[color_field].max())
         colormap = folium.LinearColormap(
-            colors=GEOFER_BLUE_SCALE,
+            colors=CARREAUX_COLOR_SCALE,
             vmin=vmin,
             vmax=vmax,
             caption=color_label,
@@ -152,7 +152,7 @@ def build_map(gare, isochrones_by_mode, selected_modes, carreaux, color_field, c
                 "fillColor": cm(feature["properties"][cf]),
                 "color": "#666666",
                 "weight": 0.2,
-                "fillOpacity": 0.75,
+                "fillOpacity": 0.92,
             },
             tooltip=folium.GeoJsonTooltip(
                 fields=["pop", "niveau_vie", "taux_pauvrete", "part_65p"],
