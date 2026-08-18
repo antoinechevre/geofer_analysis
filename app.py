@@ -295,7 +295,7 @@ def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, c
         def style_carreau(feature, cf=color_field, cm=colormap):
             if feature["properties"]["desservi"]:
                 return {"fillColor": "#c8ced6", "color": "#9aa3af", "weight": 0, "fillOpacity": 0.35}
-            return {"fillColor": cm(feature["properties"][cf]), "color": "#581012", "weight": 0, "fillOpacity": 0.92}
+            return {"fillColor": cm(feature["properties"][cf]), "color": "#581012", "weight": 0, "fillOpacity": 1.0}
 
         folium.GeoJson(
             display_carreaux,
