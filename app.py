@@ -145,7 +145,9 @@ def insee_file_for_departement(dep: str) -> str:
 
 
 def build_map(gare, isochrones_by_mode, selected_modes, carreaux, color_field, color_label, show_served):
-    m = folium.Map(location=[gare["wgs84Lat"], gare["wgs84Lon"]], zoom_start=13, tiles="OpenStreetMap")
+    m = folium.Map(location=[gare["wgs84Lat"], gare["wgs84Lon"]], zoom_start=13, tiles=None)
+    folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
+    folium.TileLayer("CartoDB positron", name="CartoDB Positron").add_to(m)
 
     if carreaux is not None and not carreaux.empty:
         unserved = carreaux[~carreaux["desservi"]]
