@@ -217,7 +217,7 @@ def script_export_png(m):
         var carte = {nom_carte};
         var bouton = document.createElement("button");
         bouton.innerHTML = "\\u2b07\\ufe0f Export PNG";
-        bouton.style.cssText = "position:absolute; top:10px; right:50px; z-index:1000; "
+        bouton.style.cssText = "position:absolute; bottom:28px; right:10px; z-index:1000; "
             + "background:white; border:2px solid rgba(0,0,0,0.2); border-radius:4px; "
             + "padding:6px 10px; font-family:'Lato',Helvetica,sans-serif; font-size:13px; "
             + "cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,0.2);";
