@@ -1,0 +1,6 @@
+streamlit==1.59.2
+folium==0.20.0
+gtfs-kit==12.2.0
+pandas==3.0.3
+requests==2.33.1
+huggingface_hub==1.28.0
