@@ -64,6 +64,9 @@ CARREAUX_COLOR_SCALE = [
     "#fff5f0", "#fee0d2", "#fcbba1", "#fc9272",
     "#fb6a4a", "#de2d26", "#a50f15", "#67000d",
 ]
+# < 1 = pousse les carreaux moyennement peuplés vers les rouges foncés (cf.
+# style_carreau) plutôt que de les laisser dans les tons pâles de l'échelle.
+CARREAUX_COLOR_GAMMA = 0.45
 GEOFER_SURFACE_GROUND = "#eff3f8"
 GEOFER_TEXT_COLOR = "#495057"
 
@@ -282,6 +285,7 @@ def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, c
     # les tuiles sans que le canvas soit "taint" par la politique cross-origin.
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap", cross_origin=True).add_to(m)
     folium.TileLayer("CartoDB positron", name="CartoDB Positron", cross_origin=True).add_to(m)
+    folium.TileLayer("CartoDB dark_matter", name="CartoDB Dark Matter", cross_origin=True).add_to(m)
 
     if carreaux is not None and not carreaux.empty:
         unserved = carreaux[~carreaux["desservi"]]
@@ -297,10 +301,19 @@ def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, c
 
         display_carreaux = carreaux if show_served else unserved
 
-        def style_carreau(feature, cf=color_field, cm=colormap):
+        def style_carreau(feature, cf=color_field, cm=colormap, lo=vmin, hi=vmax):
             if feature["properties"]["desservi"]:
                 return {"fillColor": "#c8ced6", "color": "#9aa3af", "weight": 0, "fillOpacity": 0.35}
-            return {"fillColor": cm(feature["properties"][cf]), "color": "#581012", "weight": 0, "fillOpacity": 1.0}
+            value = feature["properties"][cf]
+            if hi > lo:
+                # Distribution de population par carreau très asymétrique (beaucoup
+                # de carreaux peu peuplés, peu de carreaux très denses) : une
+                # interpolation linéaire min-max laisse la majorité des carreaux
+                # résidentiels dans les tons pâles. Le gamma < 1 pousse davantage
+                # de carreaux vers le rouge foncé pour un rendu plus contrasté.
+                frac = ((value - lo) / (hi - lo)) ** CARREAUX_COLOR_GAMMA
+                value = lo + frac * (hi - lo)
+            return {"fillColor": cm(value), "color": "#581012", "weight": 0, "fillOpacity": 1.0}
 
         folium.GeoJson(
             display_carreaux,
