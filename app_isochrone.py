@@ -50,8 +50,8 @@ GEOFER_PRIMARY = "#1992D4"
 GEOFER_SURFACE_GROUND = "#eff3f8"
 GEOFER_TEXT_COLOR = "#495057"
 DUREE_COLOR_SCALE = [
-    "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1",
-    "#6baed6", "#4292c6", "#2171b5", "#084594",
+    "#084594", "#2171b5", "#4292c6", "#6baed6",
+    "#9ecae1", "#c6dbef", "#deebf7", "#f7fbff",
 ]
 
 CUSTOM_CSS = f"""
