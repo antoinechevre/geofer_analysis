@@ -54,7 +54,6 @@ COLOR_VARIABLES = {
 FRANCE_CENTER = [46.6, 2.5]
 FRANCE_ZOOM = 6
 FRANCE_BOUNDS = (-5.5, 41.2, 9.8, 51.3)  # minx, miny, maxx, maxy
-MAX_CARREAUX_RENDER = 10000
 
 # Charte visuelle reprise de geofer.cerema.fr (thème PrimeNG bleu, police Lato)
 GEOFER_PRIMARY = "#1992D4"
@@ -388,7 +387,6 @@ def main():
 
     isochrones_in_dept = {}
     carreaux = None
-    truncated = False
     center, zoom, bounds = FRANCE_CENTER, FRANCE_ZOOM, FRANCE_BOUNDS
 
     if dept_label is None:
@@ -427,9 +425,6 @@ def main():
             st.warning("Aucun carreau INSEE trouvé dans cette zone.")
         else:
             carreaux = carreaux[carreaux["pop"] >= pop_min].copy()
-            if len(carreaux) > MAX_CARREAUX_RENDER:
-                carreaux = carreaux.nlargest(MAX_CARREAUX_RENDER, "pop")
-                truncated = True
 
             served_geoms = [
                 make_valid(geom)
@@ -441,12 +436,6 @@ def main():
                 carreaux["desservi"] = carreaux.intersects(union_geom)
             else:
                 carreaux["desservi"] = False
-
-        if truncated:
-            st.warning(
-                f"Trop de carreaux dans cette zone : limité aux {MAX_CARREAUX_RENDER:,} "
-                "les plus peuplés.".replace(",", " ")
-            )
 
     col_map, col_stats = st.columns([3, 1])
 
