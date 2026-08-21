@@ -90,7 +90,7 @@ def to_hhmm(total_seconds: float) -> str:
 @st.cache_data(show_spinner="Recherche des réseaux GTFS disponibles...")
 def list_gtfs_networks() -> list[tuple[str, str]]:
     """Liste (label, chemin_hf) des GTFS sous GTFS/ dans le dataset HF."""
-    fichiers = HfApi().list_repo_files(HF_DATA_REPO_ID, repo_type="dataset")
+    fichiers = HfApi().list_repo_files(HF_DATA_REPO_ID, repo_type="dataset", token=os.environ.get("HF_TOKEN"))
     gtfs_files = sorted(f for f in fichiers if f.startswith(GTFS_PREFIX) and f.lower().endswith(".zip"))
     labels = [(f[len(GTFS_PREFIX):].rsplit(".", 1)[0].replace("_", " "), f) for f in gtfs_files]
     return sorted(labels)
