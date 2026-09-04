@@ -4,3 +4,4 @@ __pycache__/
 Data_INSEE/Filosofi2019_carreaux_200m_gpkg.7z
 .claude/
 Output/
+.DS_Store
