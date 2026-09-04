@@ -35,6 +35,20 @@ from huggingface_hub import HfApi, hf_hub_download
 HF_DATA_REPO_ID = "antoinechevre/accessibility-data"
 GTFS_PREFIX = "GTFS/"
 
+# CARTO exige désormais une clé API sur ses fonds raster (sinon un filigrane
+# "API KEY REQUIRED" recouvre les tuiles) : chargée depuis le secret
+# CARTO_API_KEY plutôt que codée en dur, ce fichier étant public.
+CARTO_API_KEY = os.environ.get("CARTO_API_KEY")
+CARTO_ATTR = (
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors '
+    '&copy; <a href="https://carto.com/attributions">CARTO</a>'
+)
+
+
+def carto_tile_url(variant: str) -> str:
+    url = f"https://{{s}}.basemaps.cartocdn.com/{variant}/{{z}}/{{x}}/{{y}}{{r}}.png"
+    return f"{url}?key={CARTO_API_KEY}" if CARTO_API_KEY else url
+
 GEOPF_ISOCHRONE_URL = "https://data.geopf.fr/navigation/isochrone"
 GEOPF_MAX_REQ_PER_SEC = 5  # limite documentée de l'API Géoplateforme
 GEOPF_MAX_STOPS_CALLED = 150  # au-delà, repli sur un cercle approximatif (pas d'appel API)
@@ -235,7 +249,9 @@ def build_map(origine, arrets: pd.DataFrame, buffers: dict, budget_min: int, ray
     center = [origine["stop_lat"], origine["stop_lon"]]
     m = folium.Map(location=center, zoom_start=13, tiles=None, prefer_canvas=True, control_scale=True)
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap", cross_origin=True).add_to(m)
-    folium.TileLayer("CartoDB positron", name="CartoDB Positron", cross_origin=True).add_to(m)
+    folium.TileLayer(
+        carto_tile_url("light_all"), name="CartoDB Positron", attr=CARTO_ATTR, cross_origin=True,
+    ).add_to(m)
 
     if not arrets.empty:
         colormap = folium.LinearColormap(

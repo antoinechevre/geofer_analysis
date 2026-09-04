@@ -29,6 +29,20 @@ GEOFER_DIR = "Data_geofer"
 INSEE_DIR = "Data_INSEE"
 ADMIN_DIR = "Data_admin"
 
+# CARTO exige désormais une clé API sur ses fonds raster (sinon un filigrane
+# "API KEY REQUIRED" recouvre les tuiles) : chargée depuis le secret
+# CARTO_API_KEY plutôt que codée en dur, ce fichier étant public.
+CARTO_API_KEY = os.environ.get("CARTO_API_KEY")
+CARTO_ATTR = (
+    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors '
+    '&copy; <a href="https://carto.com/attributions">CARTO</a>'
+)
+
+
+def carto_tile_url(variant: str) -> str:
+    url = f"https://{{s}}.basemaps.cartocdn.com/{variant}/{{z}}/{{x}}/{{y}}{{r}}.png"
+    return f"{url}?key={CARTO_API_KEY}" if CARTO_API_KEY else url
+
 # Dégradé de bleus repris du thème PrimeNG de geofer.cerema.fr : plus la zone
 # est locale, plus le bleu est soutenu.
 ISOCHRONE_FILES = {
@@ -283,8 +297,12 @@ def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, c
     # cross_origin : nécessaire pour que leaflet-image (export PNG) puisse lire
     # les tuiles sans que le canvas soit "taint" par la politique cross-origin.
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap", cross_origin=True).add_to(m)
-    folium.TileLayer("CartoDB positron", name="CartoDB Positron", cross_origin=True).add_to(m)
-    folium.TileLayer("CartoDB dark_matter", name="CartoDB Dark Matter", cross_origin=True).add_to(m)
+    folium.TileLayer(
+        carto_tile_url("light_all"), name="CartoDB Positron", attr=CARTO_ATTR, cross_origin=True,
+    ).add_to(m)
+    folium.TileLayer(
+        carto_tile_url("dark_all"), name="CartoDB Dark Matter", attr=CARTO_ATTR, cross_origin=True,
+    ).add_to(m)
 
     if carreaux is not None and not carreaux.empty:
         unserved = carreaux[~carreaux["desservi"]]
