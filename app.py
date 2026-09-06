@@ -39,8 +39,8 @@ OFFRE_CATEGORIES = {
     "passagesIntercites": ("Intercités", "#fd8d3c"),
     "passagesTgv": ("TGV", "#e31a1c"),
 }
-OFFRE_MIN_RADIUS_PX = 6
-OFFRE_MAX_RADIUS_PX = 26
+OFFRE_MIN_RADIUS_PX = 10
+OFFRE_MAX_RADIUS_PX = 42
 
 # Fréquentation annuelle par gare (cf. extraire_frequentation_gares.py) : la
 # source (API SNCF Gares & Connexions) n'a pas encore d'année 2026 publiée à
@@ -49,8 +49,8 @@ OFFRE_MAX_RADIUS_PX = 26
 FREQUENTATION_PATH = f"{SNCF_DIR}/frequentation_gares.csv"
 FREQUENTATION_ANNEE = 2024
 FREQUENTATION_COLOR = "#08519c"
-FREQUENTATION_MIN_RADIUS_PX = 5
-FREQUENTATION_MAX_RADIUS_PX = 30
+FREQUENTATION_MIN_RADIUS_PX = 9
+FREQUENTATION_MAX_RADIUS_PX = 48
 
 # CARTO exige désormais une clé API sur ses fonds raster (sinon un filigrane
 # "API KEY REQUIRED" recouvre les tuiles) : chargée depuis le secret
@@ -522,7 +522,7 @@ def build_map(
 def main():
     st.set_page_config(page_title="Géofer Analysis", layout="wide")
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    st.title("🚉 Géofer Analysis — potentiel territorial des gares")
+    st.title("🚉 Analyse Gare - accessibilité (géofer) / fréquentation / offre")
     st.caption(
         "Toutes les gares sont affichées (regroupées en clusters) ; choisissez un département "
         "pour afficher les isochrones Géofer et la densité de population des carreaux INSEE "
@@ -541,10 +541,10 @@ def main():
         dept_label = st.selectbox("Département", departements["label"], index=None, placeholder="Choisir un département")
         include_voisins = st.checkbox("Inclure les départements limitrophes", value=True)
 
-        st.header("Isochrones affichées")
+        st.header("Isochrones d'accès Gare")
         selected_modes = [mode for mode in ISOCHRONE_FILES if st.checkbox(mode, value=True)]
 
-        st.header("Offre ferroviaire")
+        st.header("Données Gares")
         show_offre = st.checkbox("Offre 2026 (camembert TER / Intercités / TGV)", value=True)
         show_frequentation = st.checkbox(f"Fréquentation {FREQUENTATION_ANNEE} (voyageurs/an)", value=False)
 
@@ -552,6 +552,11 @@ def main():
         color_label = st.selectbox("Colorer les carreaux non desservis selon", list(COLOR_VARIABLES.keys()))
         color_field = COLOR_VARIABLES[color_label]
         pop_min = st.slider("Population minimale du carreau", 0, 200, 1, step=1)
+        deciles_selectionnes = st.multiselect(
+            f"Filtrer les carreaux par décile de {color_label} (D1 = plus faible, D10 = plus élevé)",
+            options=list(range(1, 11)),
+            default=list(range(1, 11)),
+        )
         show_served = st.checkbox("Afficher aussi les carreaux desservis (en gris)", value=True)
 
     isochrones_in_dept = {}
@@ -603,8 +608,21 @@ def main():
 
         if carreaux.empty:
             st.warning("Aucun carreau INSEE trouvé dans cette zone.")
+        elif not deciles_selectionnes:
+            st.warning("Sélectionnez au moins un décile pour afficher les carreaux.")
+            carreaux = carreaux.iloc[0:0]
         else:
             carreaux = carreaux[carreaux["pop"] >= pop_min].copy()
+
+            # Décile de color_field calculé sur les carreaux de la zone
+            # affichée (même principe que deciles_niveau_vie dans
+            # antoinechevre/Accessibility_analysis, src/utilitaires_matrix.py)
+            # — pas de filtre si tous les déciles sont sélectionnés, pour ne
+            # pas exclure les carreaux hors qcut (valeurs manquantes/secret
+            # statistique).
+            if len(deciles_selectionnes) < 10 and not carreaux.empty:
+                deciles = pd.qcut(carreaux[color_field], 10, labels=False, duplicates="drop") + 1
+                carreaux = carreaux[deciles.isin(deciles_selectionnes)].copy()
 
             served_geoms = [
                 make_valid(geom)
