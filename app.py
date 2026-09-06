@@ -465,6 +465,10 @@ def build_map(
             },
         ).add_to(m)
 
+    # offre_max_total / frequentation_max : maximum du département affiché
+    # (calculé dans main()), pas un maximum national — sinon la gare la plus
+    # fréquentée de France écrase l'échelle et les gares d'un département
+    # quelconque se tassent quasi toutes au rayon minimal.
     if offre_in_dept is not None and not offre_in_dept.empty:
         offre_layer = folium.FeatureGroup(name="Offre 2026 (TER / Intercités / TGV)")
         for _, gare_offre in offre_in_dept.iterrows():
@@ -532,9 +536,7 @@ def main():
     gares = load_gares()
     departements = load_departements()
     offre = load_offre_2026()
-    offre_max_total = offre["totalClasse"].max()
     frequentation = load_frequentation()
-    frequentation_max = frequentation["voyageurs"].max()
 
     with st.sidebar:
         st.header("Zone à charger")
@@ -557,7 +559,9 @@ def main():
     isochrones_in_dept = {}
     carreaux = None
     offre_in_dept = None
+    offre_max_total = None
     frequentation_in_dept = None
+    frequentation_max = None
     center, zoom, bounds = FRANCE_CENTER, FRANCE_ZOOM, FRANCE_BOUNDS
 
     if dept_label is None:
@@ -592,10 +596,14 @@ def main():
             offre_in_dept = in_dept[["codeUic", "wgs84Lat", "wgs84Lon"]].merge(
                 offre, on="codeUic", how="inner"
             )
+            if not offre_in_dept.empty:
+                offre_max_total = offre_in_dept["totalClasse"].max()
         if show_frequentation:
             frequentation_in_dept = in_dept[["codeUic", "wgs84Lat", "wgs84Lon"]].merge(
                 frequentation, on="codeUic", how="inner"
             )
+            if not frequentation_in_dept.empty:
+                frequentation_max = frequentation_in_dept["voyageurs"].max()
 
         insee_path = get_insee_local_path()
         zone_key = "+".join(sorted([dept["code"]] + voisins["code"].tolist()))
