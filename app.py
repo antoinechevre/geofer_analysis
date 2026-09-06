@@ -54,11 +54,16 @@ FREQUENTATION_MAX_RADIUS_PX = 64
 
 # Cartes par quart de département pré-générées et mises en cache (cf.
 # Notebook_cartes_departements.ipynb) : utilisées à la place du calcul live
-# quand les 4 quarts existent pour le département choisi — plus rapide, mais
+# quand des quarts existent pour le département choisi — plus rapide, mais
 # ne prend pas en compte les départements limitrophes (le notebook ne les
 # gère pas) et peut être en retard sur les dernières données si le cache
 # n'a pas été régénéré.
 HF_CARTES_DATASET = "antoinechevre/Analyse_gare"
+# Quarts canoniques : un département peut n'en avoir que 1 à 4 réellement
+# (decouper_en_quadrants dans le notebook n'en génère pas pour un coin de
+# son rectangle englobant hors de sa forme réelle, ex. le 54 n'a pas de NE)
+# — cette liste sert au notebook, pas à app.py qui accepte n'importe quel
+# sous-ensemble présent dans le cache (cf. afficher_cartes_cache).
 QUADRANTS = ["NO", "NE", "SO", "SE"]
 
 # CARTO exige désormais une clé API sur ses fonds raster (sinon un filigrane
@@ -311,17 +316,22 @@ def telecharger_carte_cache(nom_fichier: str) -> str:
     )
 
 
-def afficher_cartes_cache(dept, cartes_dept: dict):
+def afficher_cartes_cache(dept, quarts_disponibles: dict):
+    """quarts_disponibles : {quadrant: nom_fichier_hf}. Certains départements
+    n'ont pas leurs 4 quarts canoniques (ex. le 54 n'a pas de NE : sa forme
+    ne remplit pas ce coin de son rectangle englobant, decouper_en_quadrants
+    dans le notebook ne le génère jamais) — on affiche ceux qui existent
+    plutôt que d'exiger les 4."""
     st.info(
         "Cartes pré-générées trouvées pour ce département (cache) : affichage instantané, mais sans les "
         "départements limitrophes et potentiellement en retard sur les dernières données."
     )
-    col_no, col_ne = st.columns(2)
-    col_so, col_se = st.columns(2)
-    for quadrant, col in zip(QUADRANTS, [col_no, col_ne, col_so, col_se]):
-        with col:
+    quadrants = sorted(quarts_disponibles)
+    colonnes = st.columns(2)
+    for i, quadrant in enumerate(quadrants):
+        with colonnes[i % 2]:
             st.caption(f"{dept['nom']} — {quadrant}")
-            chemin = telecharger_carte_cache(cartes_dept[quadrant])
+            chemin = telecharger_carte_cache(quarts_disponibles[quadrant])
             with open(chemin, encoding="utf-8") as f:
                 st.iframe(f.read(), height=420)
 
@@ -612,9 +622,19 @@ def main():
         dept = departements[departements["label"] == dept_label].iloc[0]
 
         fichiers_cache = lister_cartes_cache()
-        cartes_dept = {q: f"cartes/{dept['code']}_{q}.html" for q in QUADRANTS}
-        if all(f in fichiers_cache for f in cartes_dept.values()):
-            afficher_cartes_cache(dept, cartes_dept)
+        prefixe = f"cartes/{dept['code']}_"
+        quarts_disponibles = {
+            f[len(prefixe):-len(".html")]: f
+            for f in fichiers_cache
+            if f.startswith(prefixe) and f.endswith(".html")
+        }
+        # Un seul quart déjà présent suffit : le notebook envoie tous les
+        # quarts d'un département en un seul commit (upload_folder), donc dès
+        # qu'un fichier apparaît, les autres quarts réels de ce département
+        # (parfois moins de 4 selon sa forme, cf. afficher_cartes_cache) le
+        # sont aussi.
+        if quarts_disponibles:
+            afficher_cartes_cache(dept, quarts_disponibles)
             return
 
         if include_voisins:
