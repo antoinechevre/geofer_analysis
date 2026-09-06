@@ -81,6 +81,15 @@ ISOCHRONE_FILES = {
 INSEE_DATASET_REPO = "antoinechevre/accessibility-data"
 INSEE_REMOTE_FILE_METROPOLE = "extracted/carreaux_200m_met.gpkg"
 
+# Carreaux INSEE déjà découpés par département (pop/niveau_vie/taux_pauvrete/
+# part_65p déjà calculés) et publiés sur ce dataset par
+# cache_cartes_departements.py : évite de relire le gpkg national par bbox à
+# chaque changement de département (10-15s, cf. load_insee_carreaux). Un
+# département absent du cache (pas encore généré, ou dataset indisponible)
+# retombe sur cette lecture directe.
+CARTES_DATASET_REPO = "antoinechevre/Analyse_gare"
+CARTES_DEPT_DIR = "carreaux_departements"
+
 COLOR_VARIABLES = {
     "Population": "pop",
     "Revenu moyen par habitant (€ SNV)": "niveau_vie",
@@ -185,6 +194,38 @@ def load_insee_carreaux(insee_path: str, _dept_geom, dept_code: str) -> gpd.GeoD
     # (39 colonnes contre 5), au point de dépasser la limite de message de
     # Streamlit sur les départements les plus peuplés (ex. 280 Mo sur le 17).
     return gdf[["geometry", "pop", "niveau_vie", "taux_pauvrete", "part_65p"]]
+
+
+@st.cache_data(show_spinner=False)
+def load_carreaux_dept_cache(dept_code: str) -> gpd.GeoDataFrame | None:
+    """Carreaux d'un seul département, pré-calculés sur CARTES_DATASET_REPO
+    (cf. cache_cartes_departements.py). Renvoie None si ce département n'a
+    pas (encore) de fichier dans le cache, pour que l'appelant se rabatte
+    sur load_insee_carreaux."""
+    try:
+        local_path = hf_hub_download(
+            repo_id=CARTES_DATASET_REPO,
+            repo_type="dataset",
+            filename=f"{CARTES_DEPT_DIR}/{dept_code}.parquet",
+            token=os.environ.get("HF_TOKEN"),
+        )
+    except Exception:
+        return None
+    return gpd.read_parquet(local_path)
+
+
+def load_carreaux_zone(dept_codes: list[str], zone_geom, zone_key: str) -> gpd.GeoDataFrame:
+    """Carreaux de la zone (département + limitrophes éventuels) : assemblée à
+    partir du cache par-département si CHAQUE département de la zone y est
+    présent (rapide, pas besoin du gpkg national), sinon repli complet sur
+    load_insee_carreaux (lecture du gpkg national sur l'emprise de la zone,
+    comme avant ce cache) — get_insee_local_path() n'est donc appelée, avec
+    son téléchargement potentiel du gpkg national, que dans ce cas de repli."""
+    cached = [load_carreaux_dept_cache(code) for code in dept_codes]
+    if all(gdf is not None for gdf in cached):
+        return gpd.GeoDataFrame(pd.concat(cached, ignore_index=True), crs=cached[0].crs)
+    insee_path = get_insee_local_path()
+    return load_insee_carreaux(insee_path, zone_geom, zone_key)
 
 
 @st.cache_resource(show_spinner="Récupération des carreaux INSEE (premier chargement, peut prendre une minute)...")
@@ -605,9 +646,9 @@ def main():
             if not frequentation_in_dept.empty:
                 frequentation_max = frequentation_in_dept["voyageurs"].max()
 
-        insee_path = get_insee_local_path()
-        zone_key = "+".join(sorted([dept["code"]] + voisins["code"].tolist()))
-        carreaux = load_insee_carreaux(insee_path, zone_geom, zone_key)
+        dept_codes = [dept["code"]] + voisins["code"].tolist()
+        zone_key = "+".join(sorted(dept_codes))
+        carreaux = load_carreaux_zone(dept_codes, zone_geom, zone_key)
 
         if carreaux.empty:
             st.warning("Aucun carreau INSEE trouvé dans cette zone.")
