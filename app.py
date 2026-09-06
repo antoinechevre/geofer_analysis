@@ -22,7 +22,7 @@ import geopandas as gpd
 import pandas as pd
 import streamlit as st
 from folium.plugins import MarkerCluster
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
@@ -51,6 +51,15 @@ FREQUENTATION_ANNEE = 2024
 FREQUENTATION_COLOR = "#6a3d9a"
 FREQUENTATION_MIN_RADIUS_PX = 14
 FREQUENTATION_MAX_RADIUS_PX = 64
+
+# Cartes par quart de département pré-générées et mises en cache (cf.
+# Notebook_cartes_departements.ipynb) : utilisées à la place du calcul live
+# quand les 4 quarts existent pour le département choisi — plus rapide, mais
+# ne prend pas en compte les départements limitrophes (le notebook ne les
+# gère pas) et peut être en retard sur les dernières données si le cache
+# n'a pas été régénéré.
+HF_CARTES_DATASET = "antoinechevre/Analyse_gare"
+QUADRANTS = ["NO", "NE", "SO", "SE"]
 
 # CARTO exige désormais une clé API sur ses fonds raster (sinon un filigrane
 # "API KEY REQUIRED" recouvre les tuiles) : chargée depuis le secret
@@ -282,6 +291,39 @@ def frequentation_bubble_svg(rayon_px: float) -> str:
         f'background:{FREQUENTATION_COLOR};opacity:0.7;'
         f'border:1px solid rgba(0,0,0,0.5);box-shadow:0 0 3px rgba(0,0,0,0.35);"></div>'
     )
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def lister_cartes_cache() -> set:
+    """Fichiers disponibles dans HF_CARTES_DATASET. TTL 1h (pas de cache
+    indéfini) : un nouveau lot de cartes générées par le notebook doit finir
+    par apparaître sans redéploiement du Space."""
+    try:
+        return set(HfApi().list_repo_files(HF_CARTES_DATASET, repo_type="dataset", token=os.environ.get("HF_TOKEN")))
+    except Exception:
+        return set()
+
+
+@st.cache_resource(show_spinner="Récupération de la carte pré-générée...")
+def telecharger_carte_cache(nom_fichier: str) -> str:
+    return hf_hub_download(
+        repo_id=HF_CARTES_DATASET, repo_type="dataset", filename=nom_fichier, token=os.environ.get("HF_TOKEN"),
+    )
+
+
+def afficher_cartes_cache(dept, cartes_dept: dict):
+    st.info(
+        "Cartes pré-générées trouvées pour ce département (cache) : affichage instantané, mais sans les "
+        "départements limitrophes et potentiellement en retard sur les dernières données."
+    )
+    col_no, col_ne = st.columns(2)
+    col_so, col_se = st.columns(2)
+    for quadrant, col in zip(QUADRANTS, [col_no, col_ne, col_so, col_se]):
+        with col:
+            st.caption(f"{dept['nom']} — {quadrant}")
+            chemin = telecharger_carte_cache(cartes_dept[quadrant])
+            with open(chemin, encoding="utf-8") as f:
+                st.iframe(f.read(), height=420)
 
 
 def station_popup(gare) -> str:
@@ -568,6 +610,12 @@ def main():
         st.info("Choisissez un département dans le menu de gauche pour afficher les isochrones et les carreaux INSEE.")
     else:
         dept = departements[departements["label"] == dept_label].iloc[0]
+
+        fichiers_cache = lister_cartes_cache()
+        cartes_dept = {q: f"cartes/{dept['code']}_{q}.html" for q in QUADRANTS}
+        if all(f in fichiers_cache for f in cartes_dept.values()):
+            afficher_cartes_cache(dept, cartes_dept)
+            return
 
         if include_voisins:
             voisins = departements_limitrophes(dept["code"], departements)
