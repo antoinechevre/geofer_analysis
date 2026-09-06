@@ -18,7 +18,9 @@ Application Streamlit qui superpose :
   autour d'une gare (10 min en voiture, 10 min à vélo, 15 min à pied) ;
 - la densité de population des carreaux INSEE 200x200 m (Filosofi 2019),
   filtrable selon les caractéristiques de chaque carreau (population,
-  revenu moyen, taux de pauvreté, part de 65 ans et plus).
+  revenu moyen, taux de pauvreté, part de 65 ans et plus) ;
+- l'offre ferroviaire 2026 par gare (camembert TER / Intercités / TGV) et la
+  fréquentation annuelle par gare, par département.
 
 ## Lancer en local
 
@@ -32,6 +34,11 @@ streamlit run app.py
 - `Data_geofer/` : gares, isochrones (téléchargées via `Notebook_dowload_geofer.ipynb`).
 - `Data_INSEE/` : carreaux 200 m Filosofi 2019 (métropole, Martinique, Réunion),
   suivis avec Git LFS en raison de leur taille.
+- `Data_SNCF/` : offre (`passages_gares_par_mode.csv`, cf.
+  `extraire_passages_gares_gtfs.py`) et fréquentation par gare
+  (`frequentation_gares.csv`, cf. `extraire_frequentation_gares.py`). Le
+  GTFS national SNCF source (`National_GTFS.zip`, requis pour régénérer le
+  premier fichier) n'est pas versionné (gros fichier tiers, cf. `.gitignore`).
 
 ## Déploiement sur Hugging Face Spaces
 

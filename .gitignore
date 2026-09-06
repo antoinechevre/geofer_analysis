@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 Data_INSEE/Filosofi2019_carreaux_200m_gpkg.7z
+Data_SNCF/*.zip
+Data_SNCF/*.json
 .claude/
 Output/
 .DS_Store

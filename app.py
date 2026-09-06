@@ -14,6 +14,7 @@ aller-retour Streamlit à chaque interaction.
 """
 
 import json
+import math
 import os
 
 import folium
@@ -28,6 +29,28 @@ from shapely.validation import make_valid
 GEOFER_DIR = "Data_geofer"
 INSEE_DIR = "Data_INSEE"
 ADMIN_DIR = "Data_admin"
+SNCF_DIR = "Data_SNCF"
+
+# Offre 2026 : passages de train par gare et par catégorie, extraits du GTFS
+# national SNCF sur un jour ouvré de référence (cf. extraire_passages_gares_gtfs.py).
+OFFRE_PATH = f"{SNCF_DIR}/passages_gares_par_mode.csv"
+OFFRE_CATEGORIES = {
+    "passagesTer": ("TER", "#2ca25f"),
+    "passagesIntercites": ("Intercités", "#fd8d3c"),
+    "passagesTgv": ("TGV", "#e31a1c"),
+}
+OFFRE_MIN_RADIUS_PX = 6
+OFFRE_MAX_RADIUS_PX = 26
+
+# Fréquentation annuelle par gare (cf. extraire_frequentation_gares.py) : la
+# source (API SNCF Gares & Connexions) n'a pas encore d'année 2026 publiée à
+# la date d'écriture — 2024 est la dernière année disponible, utilisée ici
+# plutôt que 2026.
+FREQUENTATION_PATH = f"{SNCF_DIR}/frequentation_gares.csv"
+FREQUENTATION_ANNEE = 2024
+FREQUENTATION_COLOR = "#08519c"
+FREQUENTATION_MIN_RADIUS_PX = 5
+FREQUENTATION_MAX_RADIUS_PX = 30
 
 # CARTO exige désormais une clé API sur ses fonds raster (sinon un filigrane
 # "API KEY REQUIRED" recouvre les tuiles) : chargée depuis le secret
@@ -156,7 +179,12 @@ def load_insee_carreaux(insee_path: str, _dept_geom, dept_code: str) -> gpd.GeoD
     gdf["niveau_vie"] = gdf["ind_snv"] / gdf["ind"]
     gdf["taux_pauvrete"] = (gdf["men_pauv"] / gdf["men"]).clip(upper=1) * 100
     gdf["part_65p"] = ((gdf["ind_65_79"] + gdf["ind_80p"]) / gdf["ind"]).clip(upper=1) * 100
-    return gdf
+    # Les dizaines de colonnes INSEE brutes (ind_snv, men_pauv, log_45_70...)
+    # ne servent qu'à calculer les 4 champs ci-dessus : les conserver dans le
+    # GeoJSON envoyé au navigateur multiplie inutilement sa taille par ~8
+    # (39 colonnes contre 5), au point de dépasser la limite de message de
+    # Streamlit sur les départements les plus peuplés (ex. 280 Mo sur le 17).
+    return gdf[["geometry", "pop", "niveau_vie", "taux_pauvrete", "part_65p"]]
 
 
 @st.cache_resource(show_spinner="Récupération des carreaux INSEE (premier chargement, peut prendre une minute)...")
@@ -181,6 +209,79 @@ def get_insee_local_path() -> str:
             "est configuré dans les paramètres du Space."
         )
         st.stop()
+
+
+@st.cache_data(show_spinner="Chargement de l'offre ferroviaire 2026...")
+def load_offre_2026() -> pd.DataFrame:
+    df = pd.read_csv(OFFRE_PATH, dtype={"codeUic": str})
+    df["totalClasse"] = df[list(OFFRE_CATEGORIES)].sum(axis=1)
+    return df[df["totalClasse"] > 0]
+
+
+def offre_pie_svg(gare_offre, rayon_px: float) -> str:
+    """Camembert CSS (conic-gradient) : parts TER/Intercités/TGV d'une gare
+    (catégorie "Autre" résiduelle du GTFS exclue, cf. extraire_passages_gares_gtfs.py,
+    donc les parts totalisent toujours 360°)."""
+    total = gare_offre["totalClasse"]
+    stops = []
+    cumule = 0.0
+    for col, (_, couleur) in OFFRE_CATEGORIES.items():
+        valeur = gare_offre[col]
+        if valeur <= 0:
+            continue
+        debut = cumule / total * 360
+        cumule += valeur
+        fin = cumule / total * 360
+        stops.append(f"{couleur} {debut:.1f}deg {fin:.1f}deg")
+    taille = rayon_px * 2
+    return (
+        f'<div style="width:{taille:.0f}px;height:{taille:.0f}px;border-radius:50%;'
+        f'background:conic-gradient({", ".join(stops)});'
+        f'border:1px solid rgba(0,0,0,0.5);box-shadow:0 0 3px rgba(0,0,0,0.35);"></div>'
+    )
+
+
+def offre_popup(gare_offre) -> str:
+    lignes = [f"<b>{gare_offre['nomGare']}</b>"]
+    for col, (label, _) in OFFRE_CATEGORIES.items():
+        if gare_offre[col] > 0:
+            lignes.append(f"{label} : {int(gare_offre[col])} trains/jour")
+    lignes.append(f"<b>Total : {int(gare_offre['totalClasse'])} trains/jour</b>")
+    return "<br>".join(lignes)
+
+
+def script_legende_offre():
+    """Légende statique (camemberts non colorables via LinearColormap)."""
+    items = "".join(
+        f'<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+        f'background:{couleur};margin-right:4px;"></span>{label}<br>'
+        for _, (label, couleur) in OFFRE_CATEGORIES.items()
+    )
+    return f"""
+    <div style="position:fixed; bottom:28px; left:10px; z-index:1000; background:white;
+        border:2px solid rgba(0,0,0,0.2); border-radius:4px; padding:6px 10px;
+        font-family:'Lato',Helvetica,sans-serif; font-size:12px; line-height:1.5;">
+        <b>Offre 2026</b><br>{items}
+    </div>
+    """
+
+
+@st.cache_data(show_spinner="Chargement de la fréquentation annuelle...")
+def load_frequentation() -> pd.DataFrame:
+    df = pd.read_csv(FREQUENTATION_PATH, dtype={"codeUic": str})
+    df = df[df["annee"] == FREQUENTATION_ANNEE]
+    return df[df["voyageurs"] > 0]
+
+
+def frequentation_bubble_svg(rayon_px: float) -> str:
+    """Simple bulle proportionnelle (pas un camembert : une seule grandeur,
+    pas de répartition par catégorie)."""
+    taille = rayon_px * 2
+    return (
+        f'<div style="width:{taille:.0f}px;height:{taille:.0f}px;border-radius:50%;'
+        f'background:{FREQUENTATION_COLOR};opacity:0.7;'
+        f'border:1px solid rgba(0,0,0,0.5);box-shadow:0 0 3px rgba(0,0,0,0.35);"></div>'
+    )
 
 
 def station_popup(gare) -> str:
@@ -290,7 +391,10 @@ def script_export_png(m):
     """
 
 
-def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label, show_served):
+def build_map(
+    gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label,
+    show_served, offre_in_dept, offre_max_total, frequentation_in_dept, frequentation_max,
+):
     # prefer_canvas : rendu canvas plutôt que SVG, indispensable pour garder un
     # zoom/pan fluide avec plusieurs milliers de polygones (carreaux INSEE).
     m = folium.Map(location=center, zoom_start=zoom, tiles=None, prefer_canvas=True, control_scale=True)
@@ -361,6 +465,45 @@ def build_map(gares, center, zoom, bounds, isochrones_in_dept, selected_modes, c
             },
         ).add_to(m)
 
+    if offre_in_dept is not None and not offre_in_dept.empty:
+        offre_layer = folium.FeatureGroup(name="Offre 2026 (TER / Intercités / TGV)")
+        for _, gare_offre in offre_in_dept.iterrows():
+            rayon = OFFRE_MIN_RADIUS_PX + (OFFRE_MAX_RADIUS_PX - OFFRE_MIN_RADIUS_PX) * math.sqrt(
+                gare_offre["totalClasse"] / offre_max_total
+            )
+            folium.Marker(
+                [gare_offre["wgs84Lat"], gare_offre["wgs84Lon"]],
+                icon=folium.DivIcon(
+                    html=offre_pie_svg(gare_offre, rayon),
+                    icon_size=(rayon * 2, rayon * 2),
+                    icon_anchor=(rayon, rayon),
+                ),
+                tooltip=f"{gare_offre['nomGare']} — {int(gare_offre['totalClasse'])} trains/jour",
+                popup=folium.Popup(offre_popup(gare_offre), max_width=220),
+            ).add_to(offre_layer)
+        offre_layer.add_to(m)
+        m.get_root().html.add_child(folium.Element(script_legende_offre()))
+
+    if frequentation_in_dept is not None and not frequentation_in_dept.empty:
+        frequentation_layer = folium.FeatureGroup(name=f"Fréquentation {FREQUENTATION_ANNEE} (voyageurs/an)")
+        for _, gare_freq in frequentation_in_dept.iterrows():
+            rayon = FREQUENTATION_MIN_RADIUS_PX + (FREQUENTATION_MAX_RADIUS_PX - FREQUENTATION_MIN_RADIUS_PX) * math.sqrt(
+                gare_freq["voyageurs"] / frequentation_max
+            )
+            folium.Marker(
+                [gare_freq["wgs84Lat"], gare_freq["wgs84Lon"]],
+                icon=folium.DivIcon(
+                    html=frequentation_bubble_svg(rayon),
+                    icon_size=(rayon * 2, rayon * 2),
+                    icon_anchor=(rayon, rayon),
+                ),
+                tooltip=(
+                    f"{gare_freq['nomGare']} — {int(gare_freq['voyageurs']):,} voyageurs/an "
+                    f"({FREQUENTATION_ANNEE})".replace(",", " ")
+                ),
+            ).add_to(frequentation_layer)
+        frequentation_layer.add_to(m)
+
     cluster = MarkerCluster(name="Gares").add_to(m)
     for _, gare in gares.iterrows():
         folium.Marker(
@@ -388,6 +531,10 @@ def main():
 
     gares = load_gares()
     departements = load_departements()
+    offre = load_offre_2026()
+    offre_max_total = offre["totalClasse"].max()
+    frequentation = load_frequentation()
+    frequentation_max = frequentation["voyageurs"].max()
 
     with st.sidebar:
         st.header("Zone à charger")
@@ -397,6 +544,10 @@ def main():
         st.header("Isochrones affichées")
         selected_modes = [mode for mode in ISOCHRONE_FILES if st.checkbox(mode, value=True)]
 
+        st.header("Offre ferroviaire")
+        show_offre = st.checkbox("Offre 2026 (camembert TER / Intercités / TGV)", value=True)
+        show_frequentation = st.checkbox(f"Fréquentation {FREQUENTATION_ANNEE} (voyageurs/an)", value=False)
+
         st.header("Filtres carreaux INSEE")
         color_label = st.selectbox("Colorer les carreaux non desservis selon", list(COLOR_VARIABLES.keys()))
         color_field = COLOR_VARIABLES[color_label]
@@ -405,6 +556,8 @@ def main():
 
     isochrones_in_dept = {}
     carreaux = None
+    offre_in_dept = None
+    frequentation_in_dept = None
     center, zoom, bounds = FRANCE_CENTER, FRANCE_ZOOM, FRANCE_BOUNDS
 
     if dept_label is None:
@@ -435,6 +588,15 @@ def main():
             full = load_isochrones(path)
             isochrones_in_dept[mode] = full[full["code_uic"].isin(codes_in_dept)]
 
+        if show_offre:
+            offre_in_dept = in_dept[["codeUic", "wgs84Lat", "wgs84Lon"]].merge(
+                offre, on="codeUic", how="inner"
+            )
+        if show_frequentation:
+            frequentation_in_dept = in_dept[["codeUic", "wgs84Lat", "wgs84Lon"]].merge(
+                frequentation, on="codeUic", how="inner"
+            )
+
         insee_path = get_insee_local_path()
         zone_key = "+".join(sorted([dept["code"]] + voisins["code"].tolist()))
         carreaux = load_insee_carreaux(insee_path, zone_geom, zone_key)
@@ -460,7 +622,7 @@ def main():
     with col_map:
         m = build_map(
             gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label,
-            show_served,
+            show_served, offre_in_dept, offre_max_total, frequentation_in_dept, frequentation_max,
         )
         st.iframe(m.get_root().render(), height=650)
 
