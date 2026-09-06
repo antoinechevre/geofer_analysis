@@ -552,11 +552,6 @@ def main():
         color_label = st.selectbox("Colorer les carreaux non desservis selon", list(COLOR_VARIABLES.keys()))
         color_field = COLOR_VARIABLES[color_label]
         pop_min = st.slider("Population minimale du carreau", 0, 200, 1, step=1)
-        deciles_selectionnes = st.multiselect(
-            f"Filtrer les carreaux par décile de {color_label} (D1 = plus faible, D10 = plus élevé)",
-            options=list(range(1, 11)),
-            default=list(range(1, 11)),
-        )
         show_served = st.checkbox("Afficher aussi les carreaux desservis (en gris)", value=True)
 
     isochrones_in_dept = {}
@@ -608,21 +603,8 @@ def main():
 
         if carreaux.empty:
             st.warning("Aucun carreau INSEE trouvé dans cette zone.")
-        elif not deciles_selectionnes:
-            st.warning("Sélectionnez au moins un décile pour afficher les carreaux.")
-            carreaux = carreaux.iloc[0:0]
         else:
             carreaux = carreaux[carreaux["pop"] >= pop_min].copy()
-
-            # Décile de color_field calculé sur les carreaux de la zone
-            # affichée (même principe que deciles_niveau_vie dans
-            # antoinechevre/Accessibility_analysis, src/utilitaires_matrix.py)
-            # — pas de filtre si tous les déciles sont sélectionnés, pour ne
-            # pas exclure les carreaux hors qcut (valeurs manquantes/secret
-            # statistique).
-            if len(deciles_selectionnes) < 10 and not carreaux.empty:
-                deciles = pd.qcut(carreaux[color_field], 10, labels=False, duplicates="drop") + 1
-                carreaux = carreaux[deciles.isin(deciles_selectionnes)].copy()
 
             served_geoms = [
                 make_valid(geom)
