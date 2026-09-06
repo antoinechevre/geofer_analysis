@@ -48,9 +48,9 @@ OFFRE_MAX_RADIUS_PX = 42
 # plutôt que 2026.
 FREQUENTATION_PATH = f"{SNCF_DIR}/frequentation_gares.csv"
 FREQUENTATION_ANNEE = 2024
-FREQUENTATION_COLOR = "#08519c"
-FREQUENTATION_MIN_RADIUS_PX = 9
-FREQUENTATION_MAX_RADIUS_PX = 48
+FREQUENTATION_COLOR = "#6a3d9a"
+FREQUENTATION_MIN_RADIUS_PX = 14
+FREQUENTATION_MAX_RADIUS_PX = 64
 
 # CARTO exige désormais une clé API sur ses fonds raster (sinon un filigrane
 # "API KEY REQUIRED" recouvre les tuiles) : chargée depuis le secret
