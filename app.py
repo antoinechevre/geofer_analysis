@@ -621,21 +621,10 @@ def main():
     else:
         dept = departements[departements["label"] == dept_label].iloc[0]
 
-        fichiers_cache = lister_cartes_cache()
-        prefixe = f"cartes/{dept['code']}_"
-        quarts_disponibles = {
-            f[len(prefixe):-len(".html")]: f
-            for f in fichiers_cache
-            if f.startswith(prefixe) and f.endswith(".html")
-        }
-        # Un seul quart déjà présent suffit : le notebook envoie tous les
-        # quarts d'un département en un seul commit (upload_folder), donc dès
-        # qu'un fichier apparaît, les autres quarts réels de ce département
-        # (parfois moins de 4 selon sa forme, cf. afficher_cartes_cache) le
-        # sont aussi.
-        if quarts_disponibles:
-            afficher_cartes_cache(dept, quarts_disponibles)
-            return
+        # Le cache par quarts (affichage éclaté en plusieurs cartes séparées)
+        # est désactivé le temps de le refaire sous forme d'une carte unique
+        # agrégée (cf. discussion en cours) — on retombe sur le calcul live
+        # habituel ci-dessous dans tous les cas.
 
         if include_voisins:
             voisins = departements_limitrophes(dept["code"], departements)
