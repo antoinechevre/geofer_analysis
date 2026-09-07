@@ -20,9 +20,10 @@ import os
 import folium
 import geopandas as gpd
 import pandas as pd
+import requests
 import streamlit as st
 from folium.plugins import MarkerCluster
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
@@ -39,7 +40,7 @@ OFFRE_CATEGORIES = {
     "passagesIntercites": ("Intercités", "#fd8d3c"),
     "passagesTgv": ("TGV", "#e31a1c"),
 }
-OFFRE_MIN_RADIUS_PX = 10
+OFFRE_MIN_RADIUS_PX = 5
 OFFRE_MAX_RADIUS_PX = 42
 
 # Fréquentation annuelle par gare (cf. extraire_frequentation_gares.py) : la
@@ -49,21 +50,30 @@ OFFRE_MAX_RADIUS_PX = 42
 FREQUENTATION_PATH = f"{SNCF_DIR}/frequentation_gares.csv"
 FREQUENTATION_ANNEE = 2024
 FREQUENTATION_COLOR = "#6a3d9a"
-FREQUENTATION_MIN_RADIUS_PX = 14
+FREQUENTATION_MIN_RADIUS_PX = 7
 FREQUENTATION_MAX_RADIUS_PX = 64
 
-# Cartes par quart de département pré-générées et mises en cache (cf.
-# Notebook_cartes_departements.ipynb) : utilisées à la place du calcul live
-# quand des quarts existent pour le département choisi — plus rapide, mais
-# ne prend pas en compte les départements limitrophes (le notebook ne les
-# gère pas) et peut être en retard sur les dernières données si le cache
-# n'a pas été régénéré.
-HF_CARTES_DATASET = "antoinechevre/Analyse_gare"
-# Quarts canoniques : un département peut n'en avoir que 1 à 4 réellement
-# (decouper_en_quadrants dans le notebook n'en génère pas pour un coin de
-# son rectangle englobant hors de sa forme réelle, ex. le 54 n'a pas de NE)
-# — cette liste sert au notebook, pas à app.py qui accepte n'importe quel
-# sous-ensemble présent dans le cache (cf. afficher_cartes_cache).
+# Flux domicile-travail/études par commune (cf. extraire_flux_mobilite.py) :
+# flèches proportionnelles depuis la commune de la gare choisie vers ses N
+# plus grosses destinations. NBFLUX est une estimation pondérée (recensement
+# complémentaire), donc décimale plutôt qu'un effectif entier.
+FLUX_TRAVAIL_FILE = "flux_domicile_travail.csv"
+FLUX_ETUDES_FILE = "flux_domicile_etudes.csv"
+FLUX_THEMES = {
+    # nom_affiché, colonne origine, colonne destination, colonne label destination, colonne flux, couleur
+    "travail": ("Domicile-travail (2022)", "CODGEO", "DCLT", "L_DCLT", "NBFLUX_C22_ACTOCC15P", "#1f78b4"),
+    "etudes": ("Domicile-études (2021)", "CODGEO", "DCETU", "L_DCETU", "NBFLUX_C21_SCOL02P", "#e6550d"),
+}
+FLUX_MIN_WEIGHT_PX = 1
+FLUX_MAX_WEIGHT_PX = 10
+FLUX_COURBURE = 0.15  # 0 = ligne droite, cf. github.com/ANGEKOTIN/Flux_mapper
+COMMUNE_CENTROID_API = "https://geo.api.gouv.fr/communes/{code}"
+
+# Quarts canoniques utilisés par Notebook_cartes_departements.ipynb pour son
+# export PNG/HTML par département (impression/aperçu, indépendant de l'app) :
+# un département peut n'en avoir que 1 à 4 réellement (decouper_en_quadrants
+# n'en génère pas pour un coin de son rectangle englobant hors de sa forme
+# réelle, ex. le 54 n'a pas de NE).
 QUADRANTS = ["NO", "NE", "SO", "SE"]
 
 # CARTO exige désormais une clé API sur ses fonds raster (sinon un filigrane
@@ -88,12 +98,15 @@ ISOCHRONE_FILES = {
     "15 min à pied": (f"{GEOFER_DIR}/iso_15min_pieton.geojson", "#0a3a55"),
 }
 
-# Carreaux INSEE 200m (Filosofi 2019, France métropolitaine) : trop volumineux
-# pour tenir dans le quota de stockage du Space (1 Go), donc téléchargés à la
-# demande depuis le dataset HF qui les héberge déjà — avec repli sur une copie
-# locale si présente (développement local, cf. Data_INSEE/).
+# Carreaux INSEE 200m (Filosofi 2019, France métropolitaine) : version légère
+# (4 colonnes déjà calculées + géométrie, WGS84, ~148 Mo en Parquet) du gpkg
+# source (1,1 Go, 39 colonnes) — cf. extraire_carreaux_leger.py. Téléchargée
+# une fois depuis le dataset HF qui l'héberge et chargée entièrement en
+# mémoire (load_carreaux_france) plutôt que lue par bbox à chaque zone comme
+# avant : plus rapide (un seul téléchargement, un seul chargement disque par
+# session) et permet un filtrage en mémoire par n'importe quelle géométrie.
 INSEE_DATASET_REPO = "antoinechevre/accessibility-data"
-INSEE_REMOTE_FILE_METROPOLE = "extracted/carreaux_200m_met.gpkg"
+INSEE_LEGER_REMOTE_FILE = "extracted/carreaux_200m_met_leger.parquet"
 
 COLOR_VARIABLES = {
     "Population": "pop",
@@ -148,6 +161,10 @@ def load_gares() -> pd.DataFrame:
     df = pd.read_csv(f"{GEOFER_DIR}/geofer_gares.csv")
     df = df[df["siOuverte"]].copy()
     df["codeUic"] = df["codeUic"].astype(str)
+    # Code commune INSEE à 5 caractères (avec zéro de tête, ex. "01001") : lu
+    # comme entier sinon, ce qui casse la comparaison aux codes texte des
+    # bases de flux (cf. FLUX_THEMES) même quand la valeur numérique matche.
+    df["inseeCommune"] = df["inseeCommune"].astype(str).str.zfill(5)
     df["label"] = df["nomGare"] + " — " + df["nomCommune"] + " (" + df["codeUic"] + ")"
     return df.sort_values("label")
 
@@ -177,33 +194,9 @@ def load_isochrones(path: str) -> gpd.GeoDataFrame:
     return gdf
 
 
-@st.cache_data(show_spinner="Chargement des carreaux INSEE de la zone (peut prendre 10-15s avec les départements limitrophes)...")
-def load_insee_carreaux(insee_path: str, _dept_geom, dept_code: str) -> gpd.GeoDataFrame:
-    """Tous les carreaux du département (_dept_geom), pas seulement ceux desservis."""
-    bbox_geom = gpd.GeoSeries([_dept_geom.envelope], crs="EPSG:4326")
-    gdf = gpd.read_file(insee_path, bbox=bbox_geom)
-    if gdf.empty:
-        return gdf
-    gdf = gdf.to_crs("EPSG:4326")
-    gdf = gdf[gdf.intersects(_dept_geom)].copy()
-    if gdf.empty:
-        return gdf
-
-    gdf["pop"] = gdf["ind"]
-    gdf["niveau_vie"] = gdf["ind_snv"] / gdf["ind"]
-    gdf["taux_pauvrete"] = (gdf["men_pauv"] / gdf["men"]).clip(upper=1) * 100
-    gdf["part_65p"] = ((gdf["ind_65_79"] + gdf["ind_80p"]) / gdf["ind"]).clip(upper=1) * 100
-    # Les dizaines de colonnes INSEE brutes (ind_snv, men_pauv, log_45_70...)
-    # ne servent qu'à calculer les 4 champs ci-dessus : les conserver dans le
-    # GeoJSON envoyé au navigateur multiplie inutilement sa taille par ~8
-    # (39 colonnes contre 5), au point de dépasser la limite de message de
-    # Streamlit sur les départements les plus peuplés (ex. 280 Mo sur le 17).
-    return gdf[["geometry", "pop", "niveau_vie", "taux_pauvrete", "part_65p"]]
-
-
-@st.cache_resource(show_spinner="Récupération des carreaux INSEE (premier chargement, peut prendre une minute)...")
-def get_insee_local_path() -> str:
-    local_path = os.path.join(INSEE_DIR, os.path.basename(INSEE_REMOTE_FILE_METROPOLE))
+@st.cache_resource(show_spinner="Récupération des carreaux INSEE (premier chargement)...")
+def get_insee_leger_path() -> str:
+    local_path = os.path.join(INSEE_DIR, os.path.basename(INSEE_LEGER_REMOTE_FILE))
     if os.path.exists(local_path):
         return local_path
     # antoinechevre/accessibility-data est un dataset privé : le Space a besoin
@@ -212,7 +205,7 @@ def get_insee_local_path() -> str:
         return hf_hub_download(
             repo_id=INSEE_DATASET_REPO,
             repo_type="dataset",
-            filename=INSEE_REMOTE_FILE_METROPOLE,
+            filename=INSEE_LEGER_REMOTE_FILE,
             token=os.environ.get("HF_TOKEN"),
         )
     except Exception as exc:
@@ -223,6 +216,23 @@ def get_insee_local_path() -> str:
             "est configuré dans les paramètres du Space."
         )
         st.stop()
+
+
+@st.cache_resource(show_spinner="Chargement des carreaux INSEE (France entière, une fois par session)...")
+def load_carreaux_france() -> gpd.GeoDataFrame:
+    return gpd.read_parquet(get_insee_leger_path())
+
+
+@st.cache_data(show_spinner="Filtrage des carreaux INSEE de la zone...")
+def load_insee_carreaux(_carreaux_france: gpd.GeoDataFrame, _dept_geom, dept_code: str) -> gpd.GeoDataFrame:
+    """Carreaux de la zone (_dept_geom), tous statuts confondus — filtrés en
+    mémoire depuis _carreaux_france (déjà chargée une fois pour la session,
+    cf. load_carreaux_france) plutôt que relus sur disque à chaque zone."""
+    minx, miny, maxx, maxy = _dept_geom.bounds
+    sous_ensemble = _carreaux_france.cx[minx:maxx, miny:maxy]
+    if sous_ensemble.empty:
+        return sous_ensemble
+    return sous_ensemble[sous_ensemble.intersects(_dept_geom)].copy()
 
 
 @st.cache_data(show_spinner="Chargement de l'offre ferroviaire 2026...")
@@ -298,42 +308,114 @@ def frequentation_bubble_svg(rayon_px: float) -> str:
     )
 
 
-@st.cache_data(show_spinner=False, ttl=3600)
-def lister_cartes_cache() -> set:
-    """Fichiers disponibles dans HF_CARTES_DATASET. TTL 1h (pas de cache
-    indéfini) : un nouveau lot de cartes générées par le notebook doit finir
-    par apparaître sans redéploiement du Space."""
+@st.cache_resource(show_spinner="Récupération des flux de mobilité...")
+def get_flux_local_path(nom_fichier: str) -> str:
+    local_path = os.path.join(INSEE_DIR, nom_fichier)
+    if os.path.exists(local_path):
+        return local_path
     try:
-        return set(HfApi().list_repo_files(HF_CARTES_DATASET, repo_type="dataset", token=os.environ.get("HF_TOKEN")))
+        return hf_hub_download(
+            repo_id=INSEE_DATASET_REPO,
+            repo_type="dataset",
+            filename=f"extracted/{nom_fichier}",
+            token=os.environ.get("HF_TOKEN"),
+        )
+    except Exception as exc:
+        st.error(f"Impossible de récupérer {nom_fichier} depuis {INSEE_DATASET_REPO} : {exc}")
+        return None
+
+
+@st.cache_resource(show_spinner="Chargement des flux de mobilité...")
+def load_flux(theme: str) -> pd.DataFrame:
+    nom_fichier = FLUX_TRAVAIL_FILE if theme == "travail" else FLUX_ETUDES_FILE
+    chemin = get_flux_local_path(nom_fichier)
+    if chemin is None:
+        return pd.DataFrame()
+    _, col_origine, col_dest, col_label, col_flux, _ = FLUX_THEMES[theme]
+    df = pd.read_csv(chemin, sep=";", dtype={col_origine: str, col_dest: str})
+    return df[[col_origine, col_dest, col_label, col_flux]]
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def commune_centroid(code_insee: str):
+    """(lat, lon) du centre de la commune (API découpage administratif de
+    data.gouv.fr) ou None en cas d'échec (code invalide, réseau...) — les
+    arrondissements de Paris/Lyon/Marseille (75101, 69381, 13201...) y sont
+    bien référencés, comme dans les bases de flux."""
+    try:
+        r = requests.get(
+            COMMUNE_CENTROID_API.format(code=code_insee), params={"fields": "centre"}, timeout=5,
+        )
+        r.raise_for_status()
+        lon, lat = r.json()["centre"]["coordinates"]
+        return lat, lon
     except Exception:
-        return set()
+        return None
 
 
-@st.cache_resource(show_spinner="Récupération de la carte pré-générée...")
-def telecharger_carte_cache(nom_fichier: str) -> str:
-    return hf_hub_download(
-        repo_id=HF_CARTES_DATASET, repo_type="dataset", filename=nom_fichier, token=os.environ.get("HF_TOKEN"),
+def bezier_arc(origine: tuple, destination: tuple, courbure: float = FLUX_COURBURE, n: int = 24) -> list:
+    """Points [lat, lon] d'une courbe de Bézier quadratique entre deux points
+    — évite que les flèches entre les mêmes communes se superposent
+    exactement à une ligne droite (même principe que
+    github.com/ANGEKOTIN/Flux_mapper, réimplémenté ici en shapely/folium)."""
+    lat1, lon1 = origine
+    lat2, lon2 = destination
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    longueur = math.hypot(dlat, dlon) or 1e-9
+    perp_lat, perp_lon = -dlon / longueur, dlat / longueur
+    ctrl_lat = (lat1 + lat2) / 2 + perp_lat * longueur * courbure
+    ctrl_lon = (lon1 + lon2) / 2 + perp_lon * longueur * courbure
+
+    points = []
+    for i in range(n + 1):
+        t = i / n
+        lat = (1 - t) ** 2 * lat1 + 2 * (1 - t) * t * ctrl_lat + t**2 * lat2
+        lon = (1 - t) ** 2 * lon1 + 2 * (1 - t) * t * ctrl_lon + t**2 * lon2
+        points.append([lat, lon])
+    return points
+
+
+def arrowhead_svg(bearing_deg: float, couleur: str, taille_px: int = 14) -> str:
+    """Triangle CSS pointant vers le nord (0°) par défaut, tourné à bearing_deg
+    (mesuré depuis le nord, sens horaire — cf. angle_entre_points)."""
+    return (
+        f'<div style="width:0;height:0;'
+        f"border-left:{taille_px // 2}px solid transparent;"
+        f"border-right:{taille_px // 2}px solid transparent;"
+        f"border-bottom:{taille_px}px solid {couleur};"
+        f'transform:rotate({bearing_deg}deg);transform-origin:50% 50%;"></div>'
     )
 
 
-def afficher_cartes_cache(dept, quarts_disponibles: dict):
-    """quarts_disponibles : {quadrant: nom_fichier_hf}. Certains départements
-    n'ont pas leurs 4 quarts canoniques (ex. le 54 n'a pas de NE : sa forme
-    ne remplit pas ce coin de son rectangle englobant, decouper_en_quadrants
-    dans le notebook ne le génère jamais) — on affiche ceux qui existent
-    plutôt que d'exiger les 4."""
-    st.info(
-        "Cartes pré-générées trouvées pour ce département (cache) : affichage instantané, mais sans les "
-        "départements limitrophes et potentiellement en retard sur les dernières données."
-    )
-    quadrants = sorted(quarts_disponibles)
-    colonnes = st.columns(2)
-    for i, quadrant in enumerate(quadrants):
-        with colonnes[i % 2]:
-            st.caption(f"{dept['nom']} — {quadrant}")
-            chemin = telecharger_carte_cache(quarts_disponibles[quadrant])
-            with open(chemin, encoding="utf-8") as f:
-                st.iframe(f.read(), height=420)
+def angle_entre_points(p1: tuple, p2: tuple) -> float:
+    lat1, lon1 = p1
+    lat2, lon2 = p2
+    return math.degrees(math.atan2(lon2 - lon1, lat2 - lat1))
+
+
+def top_flux_avec_centroides(theme: str, code_origine: str, n: int) -> list:
+    """Les n plus gros flux depuis code_origine (hors "reste dans sa
+    commune", qui n'a pas de sens comme flèche), avec centroïdes résolus."""
+    df = load_flux(theme)
+    if df.empty:
+        return []
+    _, col_origine, col_dest, col_label, col_flux, _ = FLUX_THEMES[theme]
+    origine_centre = commune_centroid(code_origine)
+    if origine_centre is None:
+        return []
+
+    sous = df[(df[col_origine] == code_origine) & (df[col_dest] != code_origine)]
+    sous = sous.sort_values(col_flux, ascending=False).head(n)
+
+    resultats = []
+    for _, ligne in sous.iterrows():
+        dest_centre = commune_centroid(ligne[col_dest])
+        if dest_centre is None:
+            continue
+        resultats.append(
+            {"origine": origine_centre, "destination": dest_centre, "label": ligne[col_label], "flux": ligne[col_flux]}
+        )
+    return resultats
 
 
 def station_popup(gare) -> str:
@@ -445,7 +527,7 @@ def script_export_png(m):
 
 def build_map(
     gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label,
-    show_served, offre_in_dept, offre_max_total, frequentation_in_dept, frequentation_max,
+    show_served, offre_in_dept, offre_max_total, frequentation_in_dept, frequentation_max, flux_par_theme,
 ):
     # prefer_canvas : rendu canvas plutôt que SVG, indispensable pour garder un
     # zoom/pan fluide avec plusieurs milliers de polygones (carreaux INSEE).
@@ -560,6 +642,33 @@ def build_map(
             ).add_to(frequentation_layer)
         frequentation_layer.add_to(m)
 
+    for theme, flux_liste in flux_par_theme.items():
+        if not flux_liste:
+            continue
+        nom_theme, _, _, _, _, couleur = FLUX_THEMES[theme]
+        flux_layer = folium.FeatureGroup(name=f"Flux {nom_theme}")
+        flux_max = max(f["flux"] for f in flux_liste)
+        for flux in flux_liste:
+            poids = FLUX_MIN_WEIGHT_PX + (FLUX_MAX_WEIGHT_PX - FLUX_MIN_WEIGHT_PX) * math.sqrt(
+                flux["flux"] / flux_max
+            )
+            courbe = bezier_arc(flux["origine"], flux["destination"])
+            folium.PolyLine(
+                courbe, color=couleur, weight=poids, opacity=0.75,
+                tooltip=f"{flux['label']} — {flux['flux']:.0f} personnes",
+            ).add_to(flux_layer)
+            angle = angle_entre_points(courbe[-2], courbe[-1])
+            taille = poids + 8
+            folium.Marker(
+                courbe[-1],
+                icon=folium.DivIcon(
+                    html=arrowhead_svg(angle, couleur, taille_px=int(taille)),
+                    icon_size=(taille, taille),
+                    icon_anchor=(taille / 2, taille / 2),
+                ),
+            ).add_to(flux_layer)
+        flux_layer.add_to(m)
+
     cluster = MarkerCluster(name="Gares").add_to(m)
     for _, gare in gares.iterrows():
         folium.Marker(
@@ -589,6 +698,7 @@ def main():
     departements = load_departements()
     offre = load_offre_2026()
     frequentation = load_frequentation()
+    carreaux_france = load_carreaux_france()
 
     with st.sidebar:
         st.header("Zone à charger")
@@ -614,17 +724,13 @@ def main():
     offre_max_total = None
     frequentation_in_dept = None
     frequentation_max = None
+    flux_par_theme = {theme: [] for theme in FLUX_THEMES}
     center, zoom, bounds = FRANCE_CENTER, FRANCE_ZOOM, FRANCE_BOUNDS
 
     if dept_label is None:
         st.info("Choisissez un département dans le menu de gauche pour afficher les isochrones et les carreaux INSEE.")
     else:
         dept = departements[departements["label"] == dept_label].iloc[0]
-
-        # Le cache par quarts (affichage éclaté en plusieurs cartes séparées)
-        # est désactivé le temps de le refaire sous forme d'une carte unique
-        # agrégée (cf. discussion en cours) — on retombe sur le calcul live
-        # habituel ci-dessous dans tous les cas.
 
         if include_voisins:
             voisins = departements_limitrophes(dept["code"], departements)
@@ -645,6 +751,28 @@ def main():
         ]
         codes_in_dept = set(in_dept["codeUic"])
 
+        communes_options = (
+            in_dept[["inseeCommune", "nomCommune"]].dropna().drop_duplicates().sort_values("nomCommune")
+        )
+        with st.sidebar:
+            st.header("Flux domicile-travail / études")
+            commune_choisie = st.selectbox(
+                "Commune (parmi les gares affichées)", communes_options["nomCommune"],
+                index=None, placeholder="Choisir une commune",
+            )
+            show_flux_travail = st.checkbox("Domicile-travail (2022)", value=False)
+            show_flux_etudes = st.checkbox("Domicile-études (2021)", value=False)
+            nb_flux = st.slider("Nombre de flux affichés (par thème)", 5, 30, 10)
+
+        if commune_choisie is not None:
+            code_commune = communes_options.loc[
+                communes_options["nomCommune"] == commune_choisie, "inseeCommune"
+            ].iloc[0]
+            if show_flux_travail:
+                flux_par_theme["travail"] = top_flux_avec_centroides("travail", code_commune, nb_flux)
+            if show_flux_etudes:
+                flux_par_theme["etudes"] = top_flux_avec_centroides("etudes", code_commune, nb_flux)
+
         for mode, (path, _) in ISOCHRONE_FILES.items():
             full = load_isochrones(path)
             isochrones_in_dept[mode] = full[full["code_uic"].isin(codes_in_dept)]
@@ -662,9 +790,8 @@ def main():
             if not frequentation_in_dept.empty:
                 frequentation_max = frequentation_in_dept["voyageurs"].max()
 
-        insee_path = get_insee_local_path()
         zone_key = "+".join(sorted([dept["code"]] + voisins["code"].tolist()))
-        carreaux = load_insee_carreaux(insee_path, zone_geom, zone_key)
+        carreaux = load_insee_carreaux(carreaux_france, zone_geom, zone_key)
 
         if carreaux.empty:
             st.warning("Aucun carreau INSEE trouvé dans cette zone.")
@@ -687,7 +814,7 @@ def main():
     with col_map:
         m = build_map(
             gares, center, zoom, bounds, isochrones_in_dept, selected_modes, carreaux, color_field, color_label,
-            show_served, offre_in_dept, offre_max_total, frequentation_in_dept, frequentation_max,
+            show_served, offre_in_dept, offre_max_total, frequentation_in_dept, frequentation_max, flux_par_theme,
         )
         st.iframe(m.get_root().render(), height=650)
 
