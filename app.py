@@ -871,7 +871,7 @@ def main():
                 "Cumul Domicile-Travail / Domicile-Étude (tous modes)", value=False,
                 help="Somme des flux travail et études pour chaque paire de communes.",
             )
-            nb_flux = st.slider("Nombre de flux affichés (par thème)", 5, 30, 10)
+            nb_flux = st.slider("Nombre de flux affichés (par thème)", 5, 50, 20)
 
         if commune_choisie is not None:
             code_commune = communes_options.loc[
