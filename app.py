@@ -76,11 +76,11 @@ FLUX_THEMES = {
 # load_flux_cumul.
 FLUX_COULEURS = {
     ("travail", "emission"): "#1f78b4",
-    ("travail", "attraction"): "#a6cee3",
+    ("travail", "attraction"): "#e41a1c",
     ("etudes", "emission"): "#e6550d",
-    ("etudes", "attraction"): "#fdbe85",
-    ("cumul", "emission"): "#33a02c",
-    ("cumul", "attraction"): "#b2df8a",
+    ("etudes", "attraction"): "#984ea3",
+    ("cumul", "emission"): "#1a9850",
+    ("cumul", "attraction"): "#ffd400",
 }
 FLUX_NOM_CUMUL = "Tous modes (travail + études, 2022/2021)"
 FLUX_SENS_LABELS = {
@@ -297,24 +297,34 @@ def offre_popup(gare_offre) -> str:
     return "<br>".join(lignes)
 
 
-def script_legende_flux(themes_actifs: list):
+def script_legende_flux(noms_calques: dict, nom_carte: str) -> str:
     """Légende des flux domicile-travail/études, positionnée au-dessus de
-    celle de l'offre 2026 (bottom plus grand). N'affiche que les thèmes
-    réellement activés (travail/études), toujours les deux sens."""
+    celle de l'offre 2026 (bottom plus grand) — une case à cocher par
+    (thème, sens) qui pilote directement le calque Leaflet correspondant
+    (retiré du LayerControl natif via control=False dans build_map, pour
+    éviter que les deux réglages de visibilité se désynchronisent).
+
+    noms_calques : {(theme, sens): nom_js_du_feature_group}, uniquement les
+    combinaisons réellement affichées (cf. build_map)."""
     lignes = ""
-    for theme in themes_actifs:
+    for (theme, sens), nom_calque in noms_calques.items():
         nom_theme = flux_theme_label(theme)
-        for sens, label_sens in FLUX_SENS_LABELS.items():
-            couleur = FLUX_COULEURS[(theme, sens)]
-            lignes += (
-                f'<span style="display:inline-block;width:16px;height:3px;'
-                f'background:{couleur};margin-right:4px;vertical-align:middle;"></span>'
-                f"{nom_theme} — {label_sens}<br>"
-            )
+        label_sens = FLUX_SENS_LABELS[sens]
+        couleur = FLUX_COULEURS[(theme, sens)]
+        lignes += (
+            f'<label style="display:block;cursor:pointer;">'
+            f'<input type="checkbox" checked '
+            f'onchange="if(this.checked){{{nom_carte}.addLayer({nom_calque})}}'
+            f'else{{{nom_carte}.removeLayer({nom_calque})}}" '
+            f'style="vertical-align:middle;margin-right:4px;">'
+            f'<span style="display:inline-block;width:16px;height:3px;'
+            f'background:{couleur};margin-right:4px;vertical-align:middle;"></span>'
+            f"{nom_theme} — {label_sens}</label>"
+        )
     return f"""
-    <div style="position:fixed; bottom:145px; left:10px; z-index:1000; background:white;
+    <div style="position:fixed; bottom:200px; left:10px; z-index:1000; background:white;
         border:2px solid rgba(0,0,0,0.2); border-radius:4px; padding:6px 10px;
-        font-family:'Lato',Helvetica,sans-serif; font-size:12px; line-height:1.6; max-width:280px;">
+        font-family:'Lato',Helvetica,sans-serif; font-size:12px; line-height:1.6; max-width:300px;">
         <b>Flux domicile-travail / domicile-études</b><br>{lignes}
         <span style="font-size:11px; color:#495057;">Flèche : du domicile vers le travail/l'étude.</span>
     </div>
@@ -329,7 +339,7 @@ def script_legende_offre():
         for _, (label, couleur) in OFFRE_CATEGORIES.items()
     )
     return f"""
-    <div style="position:fixed; bottom:28px; left:10px; z-index:1000; background:white;
+    <div style="position:fixed; bottom:80px; left:10px; z-index:1000; background:white;
         border:2px solid rgba(0,0,0,0.2); border-radius:4px; padding:6px 10px;
         font-family:'Lato',Helvetica,sans-serif; font-size:12px; line-height:1.5;">
         <b>Offre 2026</b><br>{items}
@@ -728,13 +738,18 @@ def build_map(
             ).add_to(frequentation_layer)
         frequentation_layer.add_to(m)
 
-    themes_actifs = sorted({theme for (theme, _sens) in flux_par_theme})
+    noms_calques_flux = {}
     for (theme, sens), flux_liste in flux_par_theme.items():
         if not flux_liste:
             continue
         nom_theme = flux_theme_label(theme)
         couleur = FLUX_COULEURS[(theme, sens)]
-        flux_layer = folium.FeatureGroup(name=f"Flux {nom_theme} — {FLUX_SENS_LABELS[sens].split(' (')[0]}")
+        # control=False : retiré du LayerControl natif — la légende
+        # (script_legende_flux) est l'unique commande de visibilité pour ces
+        # calques, pour éviter deux réglages désynchronisés sur le même calque.
+        flux_layer = folium.FeatureGroup(
+            name=f"Flux {nom_theme} — {FLUX_SENS_LABELS[sens].split(' (')[0]}", control=False,
+        )
         flux_max = max(f["flux"] for f in flux_liste)
         for flux in flux_liste:
             poids = FLUX_MIN_WEIGHT_PX + (FLUX_MAX_WEIGHT_PX - FLUX_MIN_WEIGHT_PX) * math.sqrt(
@@ -756,8 +771,9 @@ def build_map(
                 ),
             ).add_to(flux_layer)
         flux_layer.add_to(m)
-    if themes_actifs:
-        m.get_root().html.add_child(folium.Element(script_legende_flux(themes_actifs)))
+        noms_calques_flux[(theme, sens)] = flux_layer.get_name()
+    if noms_calques_flux:
+        m.get_root().html.add_child(folium.Element(script_legende_flux(noms_calques_flux, m.get_name())))
 
     cluster = MarkerCluster(name="Gares").add_to(m)
     for _, gare in gares.iterrows():
