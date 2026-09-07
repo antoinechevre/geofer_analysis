@@ -298,9 +298,8 @@ def offre_popup(gare_offre) -> str:
 
 
 def script_legende_flux(noms_calques: dict, nom_carte: str) -> str:
-    """Légende des flux domicile-travail/études, positionnée au-dessus de
-    celle de l'offre 2026 (bottom plus grand) — une case à cocher par
-    (thème, sens) qui pilote directement le calque Leaflet correspondant
+    """Légende des flux domicile-travail/études, centrée en bas de la carte —
+    une case à cocher par (thème, sens) qui pilote directement le calque Leaflet correspondant
     (retiré du LayerControl natif via control=False dans build_map, pour
     éviter que les deux réglages de visibilité se désynchronisent).
 
@@ -322,7 +321,7 @@ def script_legende_flux(noms_calques: dict, nom_carte: str) -> str:
             f"{nom_theme} — {label_sens}</label>"
         )
     return f"""
-    <div style="position:fixed; bottom:200px; left:10px; z-index:1000; background:white;
+    <div style="position:fixed; bottom:10px; left:50%; transform:translateX(-50%); z-index:1000; background:white;
         border:2px solid rgba(0,0,0,0.2); border-radius:4px; padding:6px 10px;
         font-family:'Lato',Helvetica,sans-serif; font-size:12px; line-height:1.6; max-width:300px;">
         <b>Flux domicile-travail / domicile-études</b><br>{lignes}
@@ -812,7 +811,7 @@ def main():
         include_voisins = st.checkbox("Inclure les départements limitrophes", value=True)
 
         st.header("Isochrones d'accès Gare")
-        selected_modes = [mode for mode in ISOCHRONE_FILES if st.checkbox(mode, value=True)]
+        selected_modes = [mode for mode in ISOCHRONE_FILES if st.checkbox(mode, value=False)]
 
         st.header("Données Gares")
         show_offre = st.checkbox("Offre 2026 (camembert TER / Intercités / TGV)", value=True)
