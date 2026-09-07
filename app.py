@@ -71,12 +71,18 @@ FLUX_THEMES = {
 # flèche pointe du domicile vers le travail/l'étude — seule l'extrémité
 # fixée à la commune choisie change. Même teinte pour un thème, plus foncée
 # en émission, plus claire en attraction.
+# "cumul" : somme travail + études pour chaque paire de communes (tous
+# motifs de déplacement confondus), pas un fichier source à part — cf.
+# load_flux_cumul.
 FLUX_COULEURS = {
     ("travail", "emission"): "#1f78b4",
     ("travail", "attraction"): "#a6cee3",
     ("etudes", "emission"): "#e6550d",
     ("etudes", "attraction"): "#fdbe85",
+    ("cumul", "emission"): "#33a02c",
+    ("cumul", "attraction"): "#b2df8a",
 }
+FLUX_NOM_CUMUL = "Tous modes (travail + études, 2022/2021)"
 FLUX_SENS_LABELS = {
     "emission": "émission (commune = domicile)",
     "attraction": "attraction (commune = lieu de travail/étude)",
@@ -297,7 +303,7 @@ def script_legende_flux(themes_actifs: list):
     réellement activés (travail/études), toujours les deux sens."""
     lignes = ""
     for theme in themes_actifs:
-        nom_theme, *_ = FLUX_THEMES[theme]
+        nom_theme = flux_theme_label(theme)
         for sens, label_sens in FLUX_SENS_LABELS.items():
             couleur = FLUX_COULEURS[(theme, sens)]
             lignes += (
@@ -368,13 +374,41 @@ def get_flux_local_path(nom_fichier: str) -> str:
 
 @st.cache_resource(show_spinner="Chargement des flux de mobilité...")
 def load_flux(theme: str) -> pd.DataFrame:
+    """Colonnes normalisées (origine/label_origine/destination/label_destination/flux)
+    pour que load_flux_cumul puisse sommer travail et études directement,
+    sans se soucier des noms de colonnes propres à chaque source INSEE."""
     nom_fichier = FLUX_TRAVAIL_FILE if theme == "travail" else FLUX_ETUDES_FILE
     chemin = get_flux_local_path(nom_fichier)
     if chemin is None:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["origine", "label_origine", "destination", "label_destination", "flux"])
     _, col_origine, col_label_origine, col_dest, col_label_dest, col_flux = FLUX_THEMES[theme]
     df = pd.read_csv(chemin, sep=";", dtype={col_origine: str, col_dest: str})
-    return df[[col_origine, col_label_origine, col_dest, col_label_dest, col_flux]]
+    df = df.rename(columns={
+        col_origine: "origine", col_label_origine: "label_origine",
+        col_dest: "destination", col_label_dest: "label_destination", col_flux: "flux",
+    })
+    return df[["origine", "label_origine", "destination", "label_destination", "flux"]]
+
+
+@st.cache_resource(show_spinner="Chargement des flux de mobilité (tous modes)...")
+def load_flux_cumul() -> pd.DataFrame:
+    """Somme des flux domicile-travail et domicile-études pour chaque paire
+    de communes — les deux sources partagent le même code commune INSEE,
+    donc un simple groupby après concat suffit (pas de vraie jointure)."""
+    combine = pd.concat([load_flux("travail"), load_flux("etudes")], ignore_index=True)
+    if combine.empty:
+        return combine
+    return combine.groupby(
+        ["origine", "destination", "label_origine", "label_destination"], as_index=False
+    )["flux"].sum()
+
+
+def _flux_df(theme: str) -> pd.DataFrame:
+    return load_flux_cumul() if theme == "cumul" else load_flux(theme)
+
+
+def flux_theme_label(theme: str) -> str:
+    return FLUX_NOM_CUMUL if theme == "cumul" else FLUX_THEMES[theme][0]
 
 
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -443,21 +477,20 @@ def top_flux_avec_centroides(theme: str, code_commune: str, n: int, sens: str) -
     lieu de travail/étude, flèches entrantes depuis les communes de
     résidence qui l'alimentent le plus. Dans les deux cas la flèche pointe
     du domicile vers le travail/l'étude (cf. FLUX_COULEURS)."""
-    df = load_flux(theme)
+    df = _flux_df(theme)
     if df.empty:
         return []
-    _, col_origine, col_label_origine, col_dest, col_label_dest, col_flux = FLUX_THEMES[theme]
     if sens == "emission":
-        col_filtre, col_autre, col_label_autre = col_origine, col_dest, col_label_dest
+        col_filtre, col_autre, col_label_autre = "origine", "destination", "label_destination"
     else:
-        col_filtre, col_autre, col_label_autre = col_dest, col_origine, col_label_origine
+        col_filtre, col_autre, col_label_autre = "destination", "origine", "label_origine"
 
     centre_choisi = commune_centroid(code_commune)
     if centre_choisi is None:
         return []
 
     sous = df[(df[col_filtre] == code_commune) & (df[col_autre] != code_commune)]
-    sous = sous.sort_values(col_flux, ascending=False).head(n)
+    sous = sous.sort_values("flux", ascending=False).head(n)
 
     resultats = []
     for _, ligne in sous.iterrows():
@@ -466,7 +499,7 @@ def top_flux_avec_centroides(theme: str, code_commune: str, n: int, sens: str) -
             continue
         origine, destination = (centre_choisi, centre_autre) if sens == "emission" else (centre_autre, centre_choisi)
         resultats.append(
-            {"origine": origine, "destination": destination, "label": ligne[col_label_autre], "flux": ligne[col_flux]}
+            {"origine": origine, "destination": destination, "label": ligne[col_label_autre], "flux": ligne["flux"]}
         )
     return resultats
 
@@ -699,7 +732,7 @@ def build_map(
     for (theme, sens), flux_liste in flux_par_theme.items():
         if not flux_liste:
             continue
-        nom_theme, *_ = FLUX_THEMES[theme]
+        nom_theme = flux_theme_label(theme)
         couleur = FLUX_COULEURS[(theme, sens)]
         flux_layer = folium.FeatureGroup(name=f"Flux {nom_theme} — {FLUX_SENS_LABELS[sens].split(' (')[0]}")
         flux_max = max(f["flux"] for f in flux_liste)
@@ -819,13 +852,21 @@ def main():
             )
             show_flux_travail = st.checkbox("Domicile-travail (2022)", value=False)
             show_flux_etudes = st.checkbox("Domicile-études (2021)", value=False)
+            show_flux_cumul = st.checkbox(
+                "Cumul Domicile-Travail / Domicile-Étude (tous modes)", value=False,
+                help="Somme des flux travail et études pour chaque paire de communes.",
+            )
             nb_flux = st.slider("Nombre de flux affichés (par thème)", 5, 30, 10)
 
         if commune_choisie is not None:
             code_commune = communes_options.loc[
                 communes_options["nomCommune"] == commune_choisie, "inseeCommune"
             ].iloc[0]
-            themes_choisis = [t for t, actif in [("travail", show_flux_travail), ("etudes", show_flux_etudes)] if actif]
+            themes_choisis = [
+                t for t, actif in
+                [("travail", show_flux_travail), ("etudes", show_flux_etudes), ("cumul", show_flux_cumul)]
+                if actif
+            ]
             for theme in themes_choisis:
                 for sens in FLUX_SENS_LABELS:
                     flux_par_theme[(theme, sens)] = top_flux_avec_centroides(theme, code_commune, nb_flux, sens)
