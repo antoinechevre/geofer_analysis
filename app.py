@@ -437,6 +437,14 @@ def _flux_df(theme: str) -> pd.DataFrame:
     return load_flux_cumul() if theme == "cumul" else load_flux(theme)
 
 
+@st.cache_data(show_spinner=False)
+def flux_csv_bytes(theme: str) -> bytes:
+    """CSV exportable des flux normalisés (arrondissements déjà fusionnés,
+    cf. load_flux) — même contenu que ce qu'utilise l'appli, pas le fichier
+    INSEE brut."""
+    return load_flux(theme).to_csv(index=False).encode("utf-8")
+
+
 def flux_theme_label(theme: str) -> str:
     return FLUX_NOM_CUMUL if theme == "cumul" else FLUX_THEMES[theme][0]
 
@@ -893,6 +901,18 @@ def main():
                 help="Somme des flux travail et études pour chaque paire de communes.",
             )
             nb_flux = st.slider("Nombre de flux affichés (par thème)", 5, 50, 20)
+            st.download_button(
+                "Télécharger domicile-travail (.csv)",
+                data=flux_csv_bytes("travail"),
+                file_name=FLUX_TRAVAIL_FILE,
+                mime="text/csv",
+            )
+            st.download_button(
+                "Télécharger domicile-études (.csv)",
+                data=flux_csv_bytes("etudes"),
+                file_name=FLUX_ETUDES_FILE,
+                mime="text/csv",
+            )
 
         if commune_choisie is not None:
             code_commune = communes_options.loc[
