@@ -82,6 +82,19 @@ FLUX_COULEURS = {
     ("cumul", "emission"): "#1a9850",
     ("cumul", "attraction"): "#ffd400",
 }
+# Paris/Lyon/Marseille : les bases de flux INSEE distinguent chaque
+# arrondissement (75101, 69381, 13201...), ce qui dilue le signal "vers
+# Paris" en 20 petites flèches plutôt qu'une seule grosse — on les fusionne
+# vers le code commune globale (75056/69123/13055) avant tout calcul de
+# top-flux, en resommant les paires (origine, destination) qui coïncident
+# après fusion (ex. deux communes de banlieue vers deux arrondissements
+# différents deviennent une seule paire "banlieue -> Paris").
+ARRONDISSEMENTS_A_FUSIONNER = {
+    **{f"751{i:02d}": "75056" for i in range(1, 21)},
+    **{f"6938{i}": "69123" for i in range(1, 10)},
+    **{f"132{i:02d}": "13055" for i in range(1, 17)},
+}
+VILLES_FUSIONNEES = {"75056": "Paris", "69123": "Lyon", "13055": "Marseille"}
 FLUX_NOM_CUMUL = "Tous modes (travail + études, 2022/2021)"
 FLUX_SENS_LABELS = {
     "emission": "émission (commune = domicile)",
@@ -396,7 +409,15 @@ def load_flux(theme: str) -> pd.DataFrame:
         col_origine: "origine", col_label_origine: "label_origine",
         col_dest: "destination", col_label_dest: "label_destination", col_flux: "flux",
     })
-    return df[["origine", "label_origine", "destination", "label_destination", "flux"]]
+    df = df[["origine", "label_origine", "destination", "label_destination", "flux"]]
+
+    df["origine"] = df["origine"].map(lambda c: ARRONDISSEMENTS_A_FUSIONNER.get(c, c))
+    df["destination"] = df["destination"].map(lambda c: ARRONDISSEMENTS_A_FUSIONNER.get(c, c))
+    df["label_origine"] = df["origine"].map(VILLES_FUSIONNEES).fillna(df["label_origine"])
+    df["label_destination"] = df["destination"].map(VILLES_FUSIONNEES).fillna(df["label_destination"])
+    return df.groupby(
+        ["origine", "label_origine", "destination", "label_destination"], as_index=False
+    )["flux"].sum()
 
 
 @st.cache_resource(show_spinner="Chargement des flux de mobilité (tous modes)...")
