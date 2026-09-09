@@ -953,14 +953,15 @@ def main():
         st.iframe(m.get_root().render(), height=650)
 
     with col_stats:
-        st.subheader(dept_label if dept_label else "Aucun département")
-        if carreaux is not None and not carreaux.empty:
-            unserved = carreaux[~carreaux["desservi"]]
-            st.metric("Population non desservie", f"{int(unserved['pop'].sum()):,}".replace(",", " "))
-            st.metric("Carreaux peuplés non desservis", f"{len(unserved):,}".replace(",", " "))
-            st.metric("Population desservie (isochrones)", f"{int(carreaux[carreaux['desservi']]['pop'].sum()):,}".replace(",", " "))
-        else:
-            st.caption("Pas encore de données pour cette zone.")
+        if selected_modes:
+            st.subheader(dept_label if dept_label else "Aucun département")
+            if carreaux is not None and not carreaux.empty:
+                unserved = carreaux[~carreaux["desservi"]]
+                st.metric("Population non desservie", f"{int(unserved['pop'].sum()):,}".replace(",", " "))
+                st.metric("Carreaux peuplés non desservis", f"{len(unserved):,}".replace(",", " "))
+                st.metric("Population desservie (isochrones)", f"{int(carreaux[carreaux['desservi']]['pop'].sum()):,}".replace(",", " "))
+            else:
+                st.caption("Pas encore de données pour cette zone.")
 
 
 if __name__ == "__main__":
