@@ -46,3 +46,32 @@ streamlit run app.py
 git remote add hf https://huggingface.co/spaces/antoinechevre/Geofer_analysis
 git push hf main
 ```
+
+## Corridor Analyse
+
+Deuxième application du même dépôt : `app_corridor.py` (déployée à part sur
+[Corridor_Analyse_fr](https://huggingface.co/spaces/antoinechevre/Corridor_Analyse_fr)),
+issue de `Notebook_corridor.ipynb`. Étant donné deux gares Géofer, elle :
+
+- suit la vraie ligne de chemin de fer entre les deux (données OpenStreetMap
+  via l'API Overpass + plus court chemin `networkx`, pas une approximation
+  géométrique) et détecte les gares intermédiaires (une seule par commune —
+  la plus fréquentée quand une agglomération en a plusieurs) ;
+- calcule la population desservie (carreaux INSEE 200 m dans l'aire
+  d'influence Géofer 10 min en voiture de chaque gare, partagée par
+  diagramme de Voronoï entre gares voisines pour éviter le double compte) ;
+- calcule les flux domicile-travail/domicile-études le long du corridor et
+  la charge cumulée par tronçon (même principe que
+  [GTFS_analysis_fr](https://github.com/antoinechevre/GTFS_analysis_fr)) ;
+- affiche une carte HTML avec toutes les couches sélectionnables
+  (fonds de carte, carreaux, isochrones, offre, fréquentation, flux, charge
+  par tronçon), exportable en PNG telle qu'affichée.
+
+Les résultats intermédiaires sont mis en cache sur le dataset HF
+[antoinechevre/Analyse_gare](https://huggingface.co/datasets/antoinechevre/Analyse_gare) :
+un corridor déjà analysé se recharge instantanément (sidebar « Corridor
+déjà identifié ») pour les visiteurs suivants.
+
+```bash
+streamlit run app_corridor.py
+```
