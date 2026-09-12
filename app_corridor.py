@@ -771,6 +771,14 @@ def formater_colonnes_entieres(df: pd.DataFrame, colonnes: list) -> pd.DataFrame
     return df
 
 
+def formater_colonnes_distance(df: pd.DataFrame, colonnes: list) -> pd.DataFrame:
+    """Copie d'affichage avec ces colonnes (km) à une décimale."""
+    df = df.copy()
+    for colonne in colonnes:
+        df[colonne] = df[colonne].map(lambda v: f"{v:.1f}")
+    return df
+
+
 # Bouton d'export PNG de la carte, reflétant exactement les couches
 # actuellement affichées (celles cochées dans le LayerControl) — via
 # leaflet-image (rasterise les tuiles + calques visibles dans un canvas).
@@ -1094,13 +1102,14 @@ def main():
         col3.metric("Somme domicile-études", f"{flux_etudes_total:,.0f}".replace(",", " "))
 
         st.subheader("Population par gare (aire d'influence 10 min voiture)")
-        st.dataframe(
-            formater_colonnes_entieres(population_corridor, ["population_10min_voiture"]),
-            width="stretch", hide_index=True,
-        )
+        population_affichee = formater_colonnes_entieres(population_corridor, ["population_10min_voiture"])
+        population_affichee = formater_colonnes_distance(population_affichee, ["distance_depart_km"])
+        st.dataframe(population_affichee, width="stretch", hide_index=True)
 
         st.subheader("Charge cumulée par tronçon")
-        st.dataframe(formater_colonnes_entieres(charge_troncons, ["charge"]), width="stretch", hide_index=True)
+        charge_affichee = formater_colonnes_entieres(charge_troncons, ["charge"])
+        charge_affichee = formater_colonnes_distance(charge_affichee, ["position_depart_km", "position_arrivee_km"])
+        st.dataframe(charge_affichee, width="stretch", hide_index=True)
 
         st.subheader(f"Top {nb_top_od} origines-destinations (cumul domicile-travail + domicile-études)")
         flux_cumul_od = flux_corridor.groupby(
