@@ -784,10 +784,17 @@ def formater_colonnes_distance(df: pd.DataFrame, colonnes: list) -> pd.DataFrame
 # leaflet-image (rasterise les tuiles + calques visibles dans un canvas).
 # cross_origin=True sur les TileLayer (cf. plus bas) est nécessaire pour
 # que ça fonctionne sans "tainter" le canvas.
+LIB_LEAFLET_IMAGE = '<script src="https://cdn.jsdelivr.net/npm/leaflet-image@0.4.0/leaflet-image.js"></script>'
+
+# Ce bloc référence la variable JS de la carte ({nom_carte} = L.map(...)),
+# mais l'ordre exact des <script> générés par folium ne garantit pas que
+# cette ligne s'exécute avant la nôtre (elle peut même passer après) — d'où
+# le DOMContentLoaded : par définition, il ne se déclenche qu'une fois tout
+# le JS de la page déjà exécuté, {nom_carte} est donc forcément assigné.
+# Sans ça, le bouton n'apparaissait pas (TypeError silencieuse sur
+# `undefined.addControl`, la variable valant encore `undefined`).
 SCRIPT_EXPORT_PNG = """
-<script src="https://cdn.jsdelivr.net/npm/leaflet-image@0.4.0/leaflet-image.js"></script>
-<script>
-(function() {{
+document.addEventListener('DOMContentLoaded', function() {{
     var carte = {nom_carte};
     var BoutonExport = L.Control.extend({{
         options: {{position: 'topright'}},
@@ -815,8 +822,7 @@ SCRIPT_EXPORT_PNG = """
         }},
     }});
     carte.addControl(new BoutonExport());
-}})();
-</script>
+}});
 """
 
 
@@ -890,7 +896,7 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
     )
     if not frequentation_corridor.empty:
         freq_max = frequentation_corridor["voyageurs"].max()
-        freq_layer = folium.FeatureGroup(name=f"Fréquentation {FREQUENTATION_ANNEE} (voyageurs/an)")
+        freq_layer = folium.FeatureGroup(name=f"Fréquentation {FREQUENTATION_ANNEE} (voyageurs/an)", show=False)
         for _, gare_freq in frequentation_corridor.iterrows():
             rayon = FREQUENTATION_MIN_RADIUS_PX + (FREQUENTATION_MAX_RADIUS_PX - FREQUENTATION_MIN_RADIUS_PX) * math.sqrt(
                 gare_freq["voyageurs"] / freq_max
@@ -911,7 +917,7 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
     offre_corridor = gares_corridor[["codeUic", "wgs84Lat", "wgs84Lon"]].merge(offre, on="codeUic", how="inner")
     if not offre_corridor.empty:
         offre_max = offre_corridor["totalClasse"].max()
-        offre_layer = folium.FeatureGroup(name="Offre 2026 (TER / Intercités / TGV)")
+        offre_layer = folium.FeatureGroup(name="Offre 2026 (TER / Intercités / TGV)", show=False)
         for _, gare_offre in offre_corridor.iterrows():
             rayon = OFFRE_MIN_RADIUS_PX + (OFFRE_MAX_RADIUS_PX - OFFRE_MIN_RADIUS_PX) * math.sqrt(
                 gare_offre["totalClasse"] / offre_max
@@ -939,7 +945,7 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
         if df_theme.empty:
             continue
         flux_max = df_theme["flux"].max()
-        couche = folium.FeatureGroup(name=nom_calque)
+        couche = folium.FeatureGroup(name=nom_calque, show=(theme == "cumul"))
         for _, flux in df_theme.iterrows():
             origine_latlon = tuple(coords_gare_corridor.loc[flux["origine"]])
             destination_latlon = tuple(coords_gare_corridor.loc[flux["destination"]])
@@ -967,7 +973,7 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
             colors=CHARGE_COLOR_SCALE, vmin=charge_min, vmax=charge_max,
             caption="Charge cumulée par tronçon (domicile-travail + domicile-études)",
         )
-        couche_charge = folium.FeatureGroup(name="Charge cumulée par tronçon")
+        couche_charge = folium.FeatureGroup(name="Charge cumulée par tronçon", show=False)
         for _, troncon in charge_troncons.iterrows():
             segment = substring(ligne_voie, troncon["position_depart_km"] * 1000, troncon["position_arrivee_km"] * 1000)
             segment_wgs84 = gpd.GeoSeries([segment], crs="EPSG:2154").to_crs("EPSG:4326").iloc[0]
@@ -993,7 +999,8 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
 
     m.fit_bounds([[miny, minx], [maxy, maxx]])
     folium.LayerControl(collapsed=False).add_to(m)
-    m.get_root().html.add_child(folium.Element(SCRIPT_EXPORT_PNG.format(nom_carte=m.get_name())))
+    m.get_root().header.add_child(folium.Element(LIB_LEAFLET_IMAGE))
+    m.get_root().script.add_child(folium.Element(SCRIPT_EXPORT_PNG.format(nom_carte=m.get_name())))
     return m
 
 
