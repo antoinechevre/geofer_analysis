@@ -786,6 +786,26 @@ def formater_colonnes_distance(df: pd.DataFrame, colonnes: list) -> pd.DataFrame
 # que ça fonctionne sans "tainter" le canvas.
 LIB_LEAFLET_IMAGE = '<script src="https://cdn.jsdelivr.net/npm/leaflet-image@0.4.0/leaflet-image.js"></script>'
 
+# La carte vit dans l'onglet "Carte" (st.tabs) : Streamlit rend les deux
+# onglets dans le DOM dès le chargement de la page, celui qui n'est pas actif
+# étant simplement masqué (conteneur à taille nulle). Leaflet calcule le
+# zoom initial (fitBounds) d'après la taille du conteneur AU MOMENT de
+# l'initialisation — si la carte s'initialise pendant que son onglet est
+# encore masqué, ce calcul est faux et ne se corrige jamais tout seul. Le
+# ResizeObserver réapplique fitBounds à chaque fois que le conteneur change
+# de taille, y compris quand l'onglet redevient visible.
+SCRIPT_RECADRAGE = """
+document.addEventListener('DOMContentLoaded', function() {{
+    var carte = {nom_carte};
+    var limites = [[{miny}, {minx}], [{maxy}, {maxx}]];
+    var observateur = new ResizeObserver(function() {{
+        carte.invalidateSize();
+        carte.fitBounds(limites);
+    }});
+    observateur.observe(carte.getContainer());
+}});
+"""
+
 # Ce bloc référence la variable JS de la carte ({nom_carte} = L.map(...)),
 # mais l'ordre exact des <script> générés par folium ne garantit pas que
 # cette ligne s'exécute avant la nôtre (elle peut même passer après) — d'où
@@ -1001,6 +1021,9 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
     folium.LayerControl(collapsed=False).add_to(m)
     m.get_root().header.add_child(folium.Element(LIB_LEAFLET_IMAGE))
     m.get_root().script.add_child(folium.Element(SCRIPT_EXPORT_PNG.format(nom_carte=m.get_name())))
+    m.get_root().script.add_child(folium.Element(
+        SCRIPT_RECADRAGE.format(nom_carte=m.get_name(), miny=miny, minx=minx, maxy=maxy, maxx=maxx)
+    ))
     return m
 
 
