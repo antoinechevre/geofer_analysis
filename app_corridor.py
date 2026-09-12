@@ -1055,7 +1055,7 @@ def main():
             "Seuil minimum affiché (personnes)", 0, 50, 10,
             help="Masque les flèches (et n'affiche pas) les flux domicile-travail/domicile-études inférieurs à ce seuil.",
         )
-        nb_top_od = st.slider("Nombre d'origines-destinations affichées", 5, 30, 10)
+        nb_top_od = st.slider("Seuil pour représenter pendulaires DT/DE", 5, 30, 10)
 
     if not gare_depart or not gare_arrivee:
         st.info("Choisissez les deux gares du corridor dans le menu de gauche.")
