@@ -983,11 +983,13 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
         couche_charge.add_to(m)
         colormap_charge.add_to(m)
 
+    couche_gares = folium.FeatureGroup(name="Gares du corridor")
     for _, gare in gares_corridor.iterrows():
         folium.CircleMarker(
             [gare["wgs84Lat"], gare["wgs84Lon"]], radius=4, color="#000", fill=True, fill_opacity=1,
             tooltip=gare["nomGare"],
-        ).add_to(m)
+        ).add_to(couche_gares)
+    couche_gares.add_to(m)
 
     m.fit_bounds([[miny, minx], [maxy, maxx]])
     folium.LayerControl(collapsed=False).add_to(m)
