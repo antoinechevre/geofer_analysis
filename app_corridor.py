@@ -101,6 +101,7 @@ CACHE_FICHIERS = [
 ]
 
 MARGE_BBOX_DEG = 0.4  # marge autour des deux gares pour la requête Overpass
+SEUIL_DISTANCE_ALERTE_KM = 200  # message d'erreur dédié au-delà, si aucune voie ne relie les deux gares
 TAMPON_VOIE_M_DEFAUT = 300  # distance max à la voie réelle pour qu'une gare soit retenue
 
 OVERPASS_MIRRORS = [
@@ -377,6 +378,7 @@ def calculer_ligne_voie(gare_depart: str, gare_arrivee: str) -> LineString:
     gares_2154 = gares.to_crs("EPSG:2154")
     point_depart = gares_2154.loc[gares["nomGare"] == gare_depart, "geometry"].iloc[0]
     point_arrivee = gares_2154.loc[gares["nomGare"] == gare_arrivee, "geometry"].iloc[0]
+    distance_vol_oiseau_km = point_depart.distance(point_arrivee) / 1000
 
     noeuds = list(reseau.nodes())
     points_noeuds = gpd.GeoSeries([Point(n) for n in noeuds], crs="EPSG:2154")
@@ -389,6 +391,13 @@ def calculer_ligne_voie(gare_depart: str, gare_arrivee: str) -> LineString:
     noeud_depart = noeud_le_plus_proche(point_depart)
     noeud_arrivee = noeud_le_plus_proche(point_arrivee)
     if not nx.has_path(reseau, noeud_depart, noeud_arrivee):
+        if distance_vol_oiseau_km > SEUIL_DISTANCE_ALERTE_KM:
+            raise RuntimeError(
+                f"{gare_depart} et {gare_arrivee} sont à {distance_vol_oiseau_km:.0f} km à vol d'oiseau "
+                f"(> {SEUIL_DISTANCE_ALERTE_KM} km) et aucune voie ferroviaire continue ne les relie dans les "
+                "données OpenStreetMap récupérées : vérifiez qu'il existe bien une ligne directe entre ces "
+                "deux gares."
+            )
         raise RuntimeError(
             f"Aucun chemin ferré continu trouvé entre {gare_depart} et {gare_arrivee} dans les données "
             "OpenStreetMap récupérées."
