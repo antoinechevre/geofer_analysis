@@ -261,6 +261,7 @@ def charger_depuis_cache_hf(nom_corridor: str):
     meta = fichiers["meta.csv"].iloc[0]
     ligne_voie = shapely_wkt.loads(meta["ligne_voie_wkt"])
     aire_influence_totale = calculer_aire_influence_totale_simple(gares_corridor)
+    departements_geom = calculer_departements_geom_simple(gares_corridor)
 
     return {
         "gares_corridor": gares_corridor,
@@ -270,11 +271,12 @@ def charger_depuis_cache_hf(nom_corridor: str):
         "charge_troncons": fichiers["charge_troncons.csv"],
         "ligne_voie": ligne_voie,
         "aire_influence_totale": aire_influence_totale,
+        "departements_geom": departements_geom,
         "distance_directe_km": float(meta["distance_directe_km"]),
     }
 
 
-def sauvegarder_cache_hf(nom_corridor: str, resultat: dict):
+def sauvegarder_cache_hf(nom_corridor: str, gare_depart: str, gare_arrivee: str, resultat: dict):
     """Best-effort : publie les résultats sur le dataset HF pour que le
     prochain visiteur demandant le même corridor n'ait pas à tout
     recalculer. N'interrompt jamais l'analyse en cours si ça échoue (droit
@@ -296,6 +298,8 @@ def sauvegarder_cache_hf(nom_corridor: str, resultat: dict):
             pd.DataFrame([{
                 "distance_directe_km": resultat["distance_directe_km"],
                 "ligne_voie_wkt": resultat["ligne_voie"].wkt,
+                "gare_depart": gare_depart,
+                "gare_arrivee": gare_arrivee,
             }]).to_csv(os.path.join(dossier_tmp, "meta.csv"), index=False)
 
             HfApi().upload_folder(
@@ -303,8 +307,48 @@ def sauvegarder_cache_hf(nom_corridor: str, resultat: dict):
                 folder_path=dossier_tmp, path_in_repo=f"{CACHE_PREFIX}/{nom_corridor}",
                 token=token,
             )
+
+        # Met à jour l'index global des corridors déjà mis en cache (liste
+        # "Corridor déjà identifié" dans la sidebar) — fichier à part, à la
+        # racine de CACHE_PREFIX, distinct des fichiers propres à ce corridor.
+        try:
+            chemin_index = hf_hub_download(
+                repo_id=CACHE_DATASET_REPO, repo_type="dataset",
+                filename=f"{CACHE_PREFIX}/index.csv", token=token,
+            )
+            index = pd.read_csv(chemin_index)
+        except Exception:
+            index = pd.DataFrame(columns=["nom_corridor", "gare_depart", "gare_arrivee"])
+        index = index[index["nom_corridor"] != nom_corridor]
+        nouvelle_ligne = pd.DataFrame([{
+            "nom_corridor": nom_corridor, "gare_depart": gare_depart, "gare_arrivee": gare_arrivee,
+        }])
+        index = pd.concat([index, nouvelle_ligne], ignore_index=True)
+        with tempfile.TemporaryDirectory() as dossier_tmp:
+            chemin_local_index = os.path.join(dossier_tmp, "index.csv")
+            index.to_csv(chemin_local_index, index=False)
+            HfApi().upload_file(
+                path_or_fileobj=chemin_local_index, path_in_repo=f"{CACHE_PREFIX}/index.csv",
+                repo_id=CACHE_DATASET_REPO, repo_type="dataset", token=token,
+            )
     except Exception as exc:
         st.caption(f"(cache partagé non mis à jour : {exc})")
+
+
+@st.cache_data(ttl=300, show_spinner="Recherche des corridors déjà analysés...")
+def lister_corridors_caches() -> pd.DataFrame:
+    """Corridors déjà mis en cache par un visiteur précédent (index tenu à
+    jour par sauvegarder_cache_hf) — alimente le sélecteur "Corridor déjà
+    identifié" de la sidebar. TTL court : un nouveau corridor mis en cache
+    par un autre visiteur doit apparaître sans attendre un redéploiement."""
+    try:
+        chemin = hf_hub_download(
+            repo_id=CACHE_DATASET_REPO, repo_type="dataset",
+            filename=f"{CACHE_PREFIX}/index.csv", token=os.environ.get("HF_TOKEN"),
+        )
+        return pd.read_csv(chemin)
+    except Exception:
+        return pd.DataFrame(columns=["nom_corridor", "gare_depart", "gare_arrivee"])
 
 
 # --------------------------------------------------------------------------
@@ -446,6 +490,10 @@ def calculer_aire_influence(gares_corridor: gpd.GeoDataFrame):
     communes_brutes = pd.concat(
         [load_communes_departement(dept) for dept in departements_corridor], ignore_index=True,
     )
+    # Union de toutes les communes des départements traversés (pas juste
+    # l'aire d'influence des gares) : sert à cadrer la couche carreaux
+    # population sur la carte, cf. construire_carte.
+    departements_geom = gpd.GeoSeries.from_wkt(communes_brutes["geometry_wkt"], crs="EPSG:4326").union_all()
     communes = gpd.GeoDataFrame(
         communes_brutes, geometry=gpd.GeoSeries.from_wkt(communes_brutes["geometry_wkt"]), crs="EPSG:4326",
     ).drop(columns="geometry_wkt").to_crs("EPSG:2154")
@@ -459,9 +507,17 @@ def calculer_aire_influence(gares_corridor: gpd.GeoDataFrame):
         recoupe["distance_a_la_gare_corridor_km"] = recoupe.geometry.centroid.distance(gare_row["point_gare"]) / 1000
         communes_influence.append(recoupe)
     communes_influence = pd.concat(communes_influence, ignore_index=True)
-    communes_influence = communes_influence.sort_values("distance_a_la_gare_corridor_km").drop_duplicates(
-        subset="code", keep="first"
-    )
+    # La commune d'une gare est toujours dans sa PROPRE isochrone (le point de
+    # la gare y est), mais deux gares de corridor très proches (ex. Bordeaux/
+    # Cenon) peuvent faire gagner la gare voisine sur le seul critère de
+    # distance au centroïde — la commune d'une gare doit toujours lui rester
+    # rattachée, sans quoi ses propres flux domicile-travail/études seraient
+    # comptés sur la mauvaise gare (jusqu'à un faux "Cenon -> Cenon" après
+    # fusion, deux communes distinctes devenant le même nœud par erreur).
+    communes_influence["propre_gare"] = communes_influence["code"] == communes_influence["gare_corridor_inseeCommune"]
+    communes_influence = communes_influence.sort_values(
+        ["propre_gare", "distance_a_la_gare_corridor_km"], ascending=[False, True]
+    ).drop_duplicates(subset="code", keep="first").drop(columns="propre_gare")
     communes_influence = communes_influence.rename(columns={"code": "inseeCommune", "nom": "nomCommune"})
     communes_influence = communes_influence.sort_values("gare_corridor_position_km")[
         ["gare_corridor_position_km", "gare_corridor", "gare_corridor_inseeCommune",
@@ -473,7 +529,18 @@ def calculer_aire_influence(gares_corridor: gpd.GeoDataFrame):
         left_on="code_uic", right_on="codeUic",
     )  # encore en EPSG:2154, nécessaire pour un Voronoï correct en mètres
 
-    return communes_influence, isochrones_corridor_completes
+    return communes_influence, isochrones_corridor_completes, departements_geom
+
+
+def calculer_departements_geom_simple(gares_corridor: gpd.GeoDataFrame):
+    """Reconstruit departements_geom (union des communes des départements
+    traversés) depuis gares_corridor seul — utilisé sur le chemin de cache
+    HF, qui ne conserve pas la géométrie des communes elle-même."""
+    departements_corridor = gares_corridor["inseeDepartement"].unique()
+    communes_brutes = pd.concat(
+        [load_communes_departement(dept) for dept in departements_corridor], ignore_index=True,
+    )
+    return gpd.GeoSeries.from_wkt(communes_brutes["geometry_wkt"], crs="EPSG:4326").union_all()
 
 
 def calculer_flux_corridor(communes_influence: pd.DataFrame) -> pd.DataFrame:
@@ -592,7 +659,7 @@ def analyser_corridor(gare_depart: str, gare_arrivee: str, tampon_voie_m: float)
     distance_directe_km = ligne_voie.length / 1000
 
     gares_corridor = detecter_corridor(gares, ligne_voie, tampon_voie_m)
-    communes_influence, isochrones_corridor_completes = calculer_aire_influence(gares_corridor)
+    communes_influence, isochrones_corridor_completes, departements_geom = calculer_aire_influence(gares_corridor)
     flux_corridor = calculer_flux_corridor(communes_influence)
     population_corridor, aire_influence_totale = calculer_population_corridor(
         gares_corridor, isochrones_corridor_completes
@@ -610,10 +677,11 @@ def analyser_corridor(gare_depart: str, gare_arrivee: str, tampon_voie_m: float)
         "flux_corridor": flux_corridor,
         "population_corridor": population_corridor,
         "aire_influence_totale": aire_influence_totale,
+        "departements_geom": departements_geom,
         "charge_troncons": charge_troncons,
         "depuis_cache": False,
     }
-    sauvegarder_cache_hf(nom_corridor, resultat)
+    sauvegarder_cache_hf(nom_corridor, gare_depart, gare_arrivee, resultat)
     return resultat
 
 
@@ -693,6 +761,16 @@ def angle_entre_points(p1: tuple, p2: tuple) -> float:
     return math.degrees(math.atan2(lon2 - lon1, lat2 - lat1))
 
 
+def formater_colonnes_entieres(df: pd.DataFrame, colonnes: list) -> pd.DataFrame:
+    """Copie d'affichage avec ces colonnes en entiers, espace comme
+    séparateur de milliers (ex. "25 000") — les données sous-jacentes
+    (CSV téléchargés, calculs) restent des nombres, seul l'affichage change."""
+    df = df.copy()
+    for colonne in colonnes:
+        df[colonne] = df[colonne].map(lambda v: f"{v:,.0f}".replace(",", " "))
+    return df
+
+
 # Bouton d'export PNG de la carte, reflétant exactement les couches
 # actuellement affichées (celles cochées dans le LayerControl) — via
 # leaflet-image (rasterise les tuiles + calques visibles dans un canvas).
@@ -737,15 +815,22 @@ SCRIPT_EXPORT_PNG = """
 def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
     gares_corridor = resultat["gares_corridor"]
     aire_influence_totale = resultat["aire_influence_totale"]
+    departements_geom = resultat["departements_geom"]
     flux_corridor = resultat["flux_corridor"]
     charge_troncons = resultat["charge_troncons"]
     ligne_voie = resultat["ligne_voie"]
     carreaux_france = load_carreaux_france()
 
-    minx, miny, maxx, maxy = aire_influence_totale.bounds
-    carreaux_corridor = carreaux_france.cx[minx:maxx, miny:maxy]
-    carreaux_corridor = carreaux_corridor[carreaux_corridor.intersects(aire_influence_totale)]
+    # La couche population couvre tous les départements traversés par le
+    # corridor (pas seulement l'aire d'influence des gares), pour donner le
+    # contexte démographique complet autour de la ligne.
+    minx_dept, miny_dept, maxx_dept, maxy_dept = departements_geom.bounds
+    carreaux_corridor = carreaux_france.cx[minx_dept:maxx_dept, miny_dept:maxy_dept]
+    carreaux_corridor = carreaux_corridor[carreaux_corridor.intersects(departements_geom)]
 
+    # Le cadrage initial de la carte reste celui du corridor lui-même (pas
+    # les départements entiers, sinon la ligne devient minuscule à l'écran).
+    minx, miny, maxx, maxy = aire_influence_totale.bounds
     centre_carte = [(miny + maxy) / 2, (minx + maxx) / 2]
     m = folium.Map(location=centre_carte, tiles=None, prefer_canvas=True, control_scale=True)
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap", cross_origin=True).add_to(m)
@@ -926,10 +1011,34 @@ def main():
     gares = load_gares()
     options_gares = gares["nomGare"].drop_duplicates().sort_values().tolist()
 
+    corridors_caches = lister_corridors_caches()
+
+    def _appliquer_corridor_cache():
+        choix = st.session_state.get("corridor_cache_select")
+        if choix and choix in corridors_par_label:
+            depart, arrivee = corridors_par_label[choix]
+            st.session_state["gare_depart_select"] = depart
+            st.session_state["gare_arrivee_select"] = arrivee
+
     with st.sidebar:
         st.header("Corridor")
-        gare_depart = st.selectbox("Gare 1 (départ)", options_gares, index=None, placeholder="Choisir une gare")
-        gare_arrivee = st.selectbox("Gare 2 (arrivée)", options_gares, index=None, placeholder="Choisir une gare")
+        if not corridors_caches.empty:
+            corridors_par_label = {
+                f"{ligne.gare_depart} → {ligne.gare_arrivee}": (ligne.gare_depart, ligne.gare_arrivee)
+                for ligne in corridors_caches.itertuples()
+            }
+            st.selectbox(
+                "Corridor déjà identifié", list(corridors_par_label), index=None,
+                placeholder="— ou choisir un corridor déjà analysé —",
+                key="corridor_cache_select", on_change=_appliquer_corridor_cache,
+                help="Recharge instantanément un corridor déjà analysé par un précédent visiteur.",
+            )
+        gare_depart = st.selectbox(
+            "Gare 1 (départ)", options_gares, index=None, placeholder="Choisir une gare", key="gare_depart_select",
+        )
+        gare_arrivee = st.selectbox(
+            "Gare 2 (arrivée)", options_gares, index=None, placeholder="Choisir une gare", key="gare_arrivee_select",
+        )
         tampon_voie_m = st.slider(
             "Tampon autour de la voie réelle (m)", 100, 1000, TAMPON_VOIE_M_DEFAUT, step=50,
             help="Distance maximale à la voie ferrée réelle pour qu'une gare soit retenue dans le corridor.",
@@ -985,17 +1094,20 @@ def main():
         col3.metric("Somme domicile-études", f"{flux_etudes_total:,.0f}".replace(",", " "))
 
         st.subheader("Population par gare (aire d'influence 10 min voiture)")
-        st.dataframe(population_corridor, width="stretch", hide_index=True)
+        st.dataframe(
+            formater_colonnes_entieres(population_corridor, ["population_10min_voiture"]),
+            width="stretch", hide_index=True,
+        )
 
         st.subheader("Charge cumulée par tronçon")
-        st.dataframe(charge_troncons, width="stretch", hide_index=True)
+        st.dataframe(formater_colonnes_entieres(charge_troncons, ["charge"]), width="stretch", hide_index=True)
 
         st.subheader(f"Top {nb_top_od} origines-destinations (cumul domicile-travail + domicile-études)")
         flux_cumul_od = flux_corridor.groupby(
             ["origine", "label_origine", "destination", "label_destination"], as_index=False
         )["flux"].sum().sort_values("flux", ascending=False)
         top_od = flux_cumul_od.head(nb_top_od).reset_index(drop=True)
-        st.dataframe(top_od, width="stretch", hide_index=True)
+        st.dataframe(formater_colonnes_entieres(top_od, ["flux"]), width="stretch", hide_index=True)
 
         st.subheader("Téléchargements")
         frequentation_historique = load_frequentation_historique()
