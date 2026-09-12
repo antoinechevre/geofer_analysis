@@ -136,7 +136,10 @@ def load_gares() -> gpd.GeoDataFrame:
     df = df[df["siOuverte"]].copy()
     df["codeUic"] = df["codeUic"].astype(str)
     df["inseeCommune"] = df["inseeCommune"].astype(str).str.zfill(5)
-    df["inseeDepartement"] = df["inseeDepartement"].astype(str)
+    # Zero-paddé à 2 chiffres (ex. "08" pour les Ardennes) : sinon l'API
+    # geo.api.gouv.fr (codeDepartement=8) ne renvoie aucune commune pour les
+    # départements 01-09, silencieusement (liste de features vide).
+    df["inseeDepartement"] = df["inseeDepartement"].astype(str).str.zfill(2)
     df["label"] = df["nomGare"] + " — " + df["nomCommune"] + " (" + df["codeUic"] + ")"
     gdf = gpd.GeoDataFrame(
         df, geometry=gpd.points_from_xy(df["wgs84Lon"], df["wgs84Lat"]), crs="EPSG:4326",
