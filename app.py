@@ -176,14 +176,6 @@ CUSTOM_CSS = f"""
 <style>
 html, body, [class*="css"] {{
     font-family: 'Lato', Helvetica, sans-serif;
-    color: {GEOFER_TEXT_COLOR};
-}}
-[data-testid="stSidebar"] {{
-    background-color: {GEOFER_SURFACE_GROUND};
-}}
-h1, h2, h3 {{
-    color: {GEOFER_PRIMARY};
-    font-weight: 900;
 }}
 [data-testid="stMetricValue"] {{
     color: {GEOFER_PRIMARY};
@@ -829,7 +821,7 @@ def main():
         </style>""",
         unsafe_allow_html=True,
     )
-    st.title("🚉 Analyse Gare - accessibilité (géofer) / fréquentation / offre")
+    st.title("🚉 Analyse Gare - accessibilité (géofer) / fréquentation / offre / domicile études_travail")
     st.caption(
         "Toutes les gares sont affichées (regroupées en clusters) ; choisissez un département "
         "pour afficher les isochrones Géofer et la densité de population des carreaux INSEE "
