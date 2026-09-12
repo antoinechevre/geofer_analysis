@@ -1052,7 +1052,7 @@ def main():
             help="Distance maximale à la voie ferrée réelle pour qu'une gare soit retenue dans le corridor.",
         )
         seuil_min_flux = st.slider(
-            "Seuil pour représenter pendulaires DT/DE", 0, 50, 10,
+            "Nombre de flèches max à représenter", 0, 50, 10,
             help="Masque les flèches (et n'affiche pas) les flux domicile-travail/domicile-études inférieurs à ce seuil.",
         )
         nb_top_od = st.slider("Nombre d'origines-destinations affichées", 5, 30, 10)
