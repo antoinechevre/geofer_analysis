@@ -819,8 +819,16 @@ def build_map(
 
 
 def main():
-    st.set_page_config(page_title="Géofer Analysis", layout="wide")
+    st.set_page_config(page_title="Géofer Analysis", page_icon="🚉", layout="wide")
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+    st.markdown(
+        """<style>
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"], section.main {
+            scrollbar-gutter: stable;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
     st.title("🚉 Analyse Gare - accessibilité (géofer) / fréquentation / offre")
     st.caption(
         "Toutes les gares sont affichées (regroupées en clusters) ; choisissez un département "

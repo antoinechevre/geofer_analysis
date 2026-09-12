@@ -1,6 +1,16 @@
+# Thème repris de github.com/antoinechevre/Accessibility_analysis (identité
+# "signalétique transport" : sidebar sombre bleu-sarcelle, contenu clair) —
+# homogénéise Géofer Analysis et Corridor Analyse avec cette autre appli.
 [theme]
-primaryColor = "#1992D4"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#EFF3F8"
-textColor = "#495057"
+base = "light"
+primaryColor = "#0E7C7B"
+backgroundColor = "#FAFAF8"
+secondaryBackgroundColor = "#EDF2F0"
+textColor = "#182422"
 font = "sans serif"
+
+[theme.sidebar]
+backgroundColor = "#123335"
+secondaryBackgroundColor = "#1B4547"
+textColor = "#E8F2F0"
+primaryColor = "#4FD6C4"
