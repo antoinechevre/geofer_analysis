@@ -13,9 +13,11 @@ Accessibility_analysis, onglet Cartographie INSEE) plutôt qu'un
 aller-retour Streamlit à chaque interaction.
 """
 
+import datetime
 import json
 import math
 import os
+import threading
 
 import folium
 import geopandas as gpd
@@ -23,7 +25,7 @@ import pandas as pd
 import requests
 import streamlit as st
 from folium.plugins import MarkerCluster
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
@@ -143,6 +145,42 @@ ISOCHRONE_FILES = {
 # session) et permet un filtrage en mémoire par n'importe quelle géométrie.
 INSEE_DATASET_REPO = "antoinechevre/accessibility-data"
 INSEE_LEGER_REMOTE_FILE = "extracted/carreaux_200m_met_leger.parquet"
+
+# Compteur de visites : un marqueur vide horodaté par nouvelle session sous
+# visites_geofer_analysis/ sur le dataset HF Analyse_gare — jamais de
+# compteur partagé relu-modifié-réécrit, pour ne perdre aucune visite en
+# cas de sessions concurrentes (cf. github.com/antoinechevre/
+# Accessibility_analysis, qui utilise le même principe pour sa
+# notification quotidienne par mail ; ici affiché directement dans l'app).
+VISITES_DATASET_REPO = "antoinechevre/Analyse_gare"
+VISITES_PREFIXE = "visites_geofer_analysis"
+
+
+def enregistrer_visite():
+    """Best-effort, appelé dans un thread à part : ne doit jamais ralentir
+    ni faire échouer le chargement de la page."""
+    horodatage = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    try:
+        HfApi().upload_file(
+            path_or_fileobj=b"",
+            path_in_repo=f"{VISITES_PREFIXE}/{horodatage}.marker",
+            repo_id=VISITES_DATASET_REPO,
+            repo_type="dataset",
+            token=os.environ.get("HF_TOKEN"),
+        )
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def compter_visites() -> int:
+    """TTL court : une nouvelle visite doit apparaître dans le compteur
+    sans attendre un redéploiement."""
+    try:
+        fichiers = HfApi().list_repo_files(VISITES_DATASET_REPO, repo_type="dataset")
+        return sum(1 for f in fichiers if f.startswith(f"{VISITES_PREFIXE}/"))
+    except Exception:
+        return 0
 
 COLOR_VARIABLES = {
     "Population": "pop",
@@ -835,6 +873,11 @@ def main():
         "Toutes les données utilisées sont accessibles "
         "[là](https://huggingface.co/datasets/antoinechevre/Analyse_gare)"
     )
+    st.caption(f"👀 {compter_visites():,} visites".replace(",", " "))
+
+    if "visite_enregistree" not in st.session_state:
+        st.session_state.visite_enregistree = True
+        threading.Thread(target=enregistrer_visite, daemon=True).start()
 
     gares = load_gares()
     departements = load_departements()

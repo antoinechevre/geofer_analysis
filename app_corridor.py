@@ -16,10 +16,12 @@ visiteur se recharge instantanément, sans repasser par Overpass/le
 routage réseau/l'API découpage administratif.
 """
 
+import datetime
 import io
 import math
 import os
 import tempfile
+import threading
 import time
 
 import folium
@@ -99,6 +101,39 @@ CACHE_FICHIERS = [
     "gares_corridor.csv", "communes_influence.csv", "flux_corridor.csv",
     "population_gares.csv", "charge_troncons.csv", "meta.csv",
 ]
+
+# Compteur de visites : un marqueur vide horodaté par nouvelle session, sur
+# le même dataset HF que le cache — jamais de compteur partagé
+# relu-modifié-réécrit, pour ne perdre aucune visite en cas de sessions
+# concurrentes (cf. github.com/antoinechevre/Accessibility_analysis).
+VISITES_PREFIXE = "visites_corridor_analyse"
+
+
+def enregistrer_visite():
+    """Best-effort, appelé dans un thread à part : ne doit jamais ralentir
+    ni faire échouer le chargement de la page."""
+    horodatage = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    try:
+        HfApi().upload_file(
+            path_or_fileobj=b"",
+            path_in_repo=f"{VISITES_PREFIXE}/{horodatage}.marker",
+            repo_id=CACHE_DATASET_REPO,
+            repo_type="dataset",
+            token=os.environ.get("HF_TOKEN"),
+        )
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def compter_visites() -> int:
+    """TTL court : une nouvelle visite doit apparaître dans le compteur
+    sans attendre un redéploiement."""
+    try:
+        fichiers = HfApi().list_repo_files(CACHE_DATASET_REPO, repo_type="dataset")
+        return sum(1 for f in fichiers if f.startswith(f"{VISITES_PREFIXE}/"))
+    except Exception:
+        return 0
 
 MARGE_BBOX_DEG = 0.4  # marge autour des deux gares pour la requête Overpass
 SEUIL_DISTANCE_ALERTE_KM = 200  # message d'erreur dédié au-delà, si aucune voie ne relie les deux gares
@@ -1060,6 +1095,11 @@ def main():
         "Toutes les données utilisées sont accessibles "
         "[là](https://huggingface.co/datasets/antoinechevre/Analyse_gare)"
     )
+    st.caption(f"👀 {compter_visites():,} visites".replace(",", " "))
+
+    if "visite_enregistree" not in st.session_state:
+        st.session_state.visite_enregistree = True
+        threading.Thread(target=enregistrer_visite, daemon=True).start()
 
     gares = load_gares()
     options_gares = gares["nomGare"].drop_duplicates().sort_values().tolist()
