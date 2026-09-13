@@ -884,6 +884,7 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
         colormap = folium.LinearColormap(
             colors=CARREAUX_COLOR_SCALE, vmin=vmin, vmax=vmax, caption="Population (carreau 200m)"
         )
+        colormap.width = 260  # défaut branca (450px) trop large sur la droite de la carte
 
         def style_carreau(feature, lo=vmin, hi=vmax):
             value = feature["properties"]["pop"]
@@ -994,8 +995,9 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
         charge_max = charge_troncons["charge"].max()
         colormap_charge = folium.LinearColormap(
             colors=CHARGE_COLOR_SCALE, vmin=charge_min, vmax=charge_max,
-            caption="Charge cumulée par tronçon (domicile-travail + domicile-études)",
+            caption="Charge cumulée par tronçon",  # légende SVG sur une seule ligne : pas de retour à la ligne possible
         )
+        colormap_charge.width = 260  # défaut branca (450px) trop large sur la droite de la carte
         couche_charge = folium.FeatureGroup(name="Charge cumulée par tronçon", show=False)
         for _, troncon in charge_troncons.iterrows():
             segment = substring(ligne_voie, troncon["position_depart_km"] * 1000, troncon["position_arrivee_km"] * 1000)
