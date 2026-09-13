@@ -827,6 +827,10 @@ def main():
         "pour afficher les isochrones Géofer et la densité de population des carreaux INSEE "
         "200x200 m (Filosofi 2019), sur l'ensemble de son territoire."
     )
+    st.caption(
+        "Réalisé par @antoine.chevre 🐐 In we goat we trust - "
+        "[tout le code en open source](https://github.com/antoinechevre/geofer_analysis)"
+    )
 
     gares = load_gares()
     departements = load_departements()
