@@ -1,5 +1,8 @@
 """Exécute Notebook_corridor.ipynb pour chaque corridor listé dans l'onglet
-"corridor" de gares_geofer.xlsx (colonnes gare_depart, gare_arrivee).
+"corridor" de gares_geofer.xlsx — repère lui-même les colonnes "Gare 1" /
+"Gare 2" (peu importe leur position ou le nombre de lignes de titre
+au-dessus), pour rester utilisable même si l'onglet est réorganisé à la
+main dans Excel.
 
 Chaque exécution calcule le corridor (gares intermédiaires, aire
 d'influence, flux, population, charge par tronçon, carte) et pousse ses
@@ -27,7 +30,28 @@ KERNEL = "gtfs-app"
 
 
 def lister_corridors(chemin_xlsx: Path) -> pd.DataFrame:
-    corridors = pd.read_excel(chemin_xlsx, sheet_name=ONGLET_CORRIDOR)
+    brut = pd.read_excel(chemin_xlsx, sheet_name=ONGLET_CORRIDOR, header=None)
+
+    col_depart = col_arrivee = ligne_entete = None
+    for i, ligne in brut.iterrows():
+        for j, valeur in enumerate(ligne):
+            if not isinstance(valeur, str):
+                continue
+            valeur = valeur.strip()
+            if re.fullmatch(r"gare\s*1", valeur, re.IGNORECASE):
+                col_depart, ligne_entete = j, i
+            elif re.fullmatch(r"gare\s*2", valeur, re.IGNORECASE):
+                col_arrivee = j
+        if col_depart is not None and col_arrivee is not None:
+            break
+
+    if col_depart is None or col_arrivee is None:
+        raise ValueError(
+            f"Colonnes \"Gare 1\"/\"Gare 2\" introuvables dans l'onglet {ONGLET_CORRIDOR!r} de {chemin_xlsx}."
+        )
+
+    corridors = brut.iloc[ligne_entete + 1:, [col_depart, col_arrivee]].copy()
+    corridors.columns = ["gare_depart", "gare_arrivee"]
     return corridors.dropna(subset=["gare_depart", "gare_arrivee"])
 
 
