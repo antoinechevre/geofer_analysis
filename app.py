@@ -831,6 +831,10 @@ def main():
         "Réalisé par @antoine.chevre 🐐 In we goat we trust - "
         "[tout le code en open source](https://github.com/antoinechevre/geofer_analysis)"
     )
+    st.caption(
+        "Toutes les données utilisées sont accessibles "
+        "[là](https://huggingface.co/datasets/antoinechevre/Analyse_gare)"
+    )
 
     gares = load_gares()
     departements = load_departements()
