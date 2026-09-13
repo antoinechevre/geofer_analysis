@@ -870,12 +870,12 @@ def construire_carte(resultat: dict, seuil_min_flux: float) -> folium.Map:
     minx, miny, maxx, maxy = aire_influence_totale.bounds
     centre_carte = [(miny + maxy) / 2, (minx + maxx) / 2]
     m = folium.Map(location=centre_carte, tiles=None, prefer_canvas=True, control_scale=True)
-    folium.TileLayer("OpenStreetMap", name="OpenStreetMap", cross_origin=True).add_to(m)
+    folium.TileLayer("OpenStreetMap", name="OpenStreetMap", cross_origin=True, show=True).add_to(m)
     folium.TileLayer(
-        carto_tile_url("light_all"), name="CartoDB Positron", attr=CARTO_ATTR, cross_origin=True,
+        carto_tile_url("light_all"), name="CartoDB Positron", attr=CARTO_ATTR, cross_origin=True, show=False,
     ).add_to(m)
     folium.TileLayer(
-        carto_tile_url("dark_all"), name="CartoDB Dark Matter", attr=CARTO_ATTR, cross_origin=True,
+        carto_tile_url("dark_all"), name="CartoDB Dark Matter", attr=CARTO_ATTR, cross_origin=True, show=False,
     ).add_to(m)
 
     if not carreaux_corridor.empty:
